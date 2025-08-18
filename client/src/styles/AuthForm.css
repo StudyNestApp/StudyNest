@@ -1,0 +1,113 @@
+:root {
+  --teal-800: #0f766e;
+  --blue-500: #3b82f6;
+  --gray-300: #d1d5db;
+  --red-500: #ef4444;
+}
+
+/* Reset & lock page */
+html, body {
+  height: 100%;
+  margin: 0;
+  padding: 0;
+  overflow: hidden;        /* no scroll */
+  font-family: system-ui, sans-serif;
+}
+
+/* Full-screen container */
+.auth-container {
+  position: relative;
+  height: 100vh;
+  width: 100%;
+  display: flex;
+  justify-content: center;
+  align-items: center;   /* perfect vertical + horizontal center */
+  background: url('../assets/bg-auth.png') center center / cover no-repeat fixed;
+}
+
+/* Transparent auth card */
+.auth-card {
+  width: 100%;
+  max-width: clamp(300px, 35vw, 420px);
+  padding: clamp(1.5rem, 4vw, 2rem);
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  background: transparent;
+}
+
+/* Logo */
+.logo {
+  width: clamp(8rem, 25vw, 12rem);
+  height: auto;
+  display: block;
+  margin: 0 auto 1rem;
+}
+
+/* Title */
+.title {
+  text-align: center;
+  font-size: clamp(1.25rem, 2.5vw, 1.5rem);
+  font-weight: 700;
+  color: var(--teal-800);
+  margin-bottom: 1rem;
+}
+
+/* Form stack */
+.form-stack {
+  display: flex;
+  flex-direction: column;
+  gap: clamp(0.6rem, 1.2vw, 1rem);
+}
+
+/* Inputs */
+.form-stack input {
+  width: 100%;
+  padding: clamp(0.6rem, 1.2vw, 0.75rem) clamp(0.9rem, 1.5vw, 1rem);
+  border: 1px solid var(--gray-300);
+  border-radius: 0.5rem;
+  background: rgba(255, 255, 255, 0.7);
+  font-size: clamp(0.9rem, 1.5vw, 1rem);
+  outline: none;
+}
+
+.form-stack input:focus {
+  border-color: var(--teal-800);
+  box-shadow: 0 0 0 3px rgba(15, 118, 110, 0.15);
+}
+
+/* Error */
+.error {
+  color: var(--red-500);
+  font-size: clamp(0.8rem, 1.2vw, 0.875rem);
+}
+
+/* Buttons */
+.primary-btn {
+  width: 100%;
+}
+
+.google-btn-row {
+  display: flex;
+  justify-content: center;
+}
+
+/* Switch */
+.switch-text {
+  text-align: center;
+  font-size: clamp(0.8rem, 1.2vw, 0.9rem);
+  color: var(--teal-800);
+}
+
+.switch-link {
+  background: none;
+  border: none;
+  color: var(--blue-500);
+  text-decoration: underline;
+  cursor: pointer;
+  padding: 0;
+}
+.switch-link:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
