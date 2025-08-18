@@ -96,39 +96,6 @@ function Welcome() {
           </button>
         </div>
 
-        {/* Statistics Cards */}
-        <div className="stats-grid">
-          <div className="stat-card teal">
-            <div className="stat-content">
-              <div>
-                <p className="stat-text">Total Rooms</p>
-                <p className="stat-number">{rooms.length}</p>
-              </div>
-              <div className="stat-icon">🏠</div>
-            </div>
-          </div>
-          
-          <div className="stat-card blue">
-            <div className="stat-content">
-              <div>
-                <p className="stat-text">Active Students</p>
-                <p className="stat-number">{rooms.reduce((sum, room) => sum + room.attendance, 0)}</p>
-              </div>
-              <div className="stat-icon">👥</div>
-            </div>
-          </div>
-          
-          <div className="stat-card purple">
-            <div className="stat-content">
-              <div>
-                <p className="stat-text">Your Status</p>
-                <p className="stat-number">Ready</p>
-              </div>
-              <div className="stat-icon">✨</div>
-            </div>
-          </div>
-        </div>
-
         {/* Error Message */}
         {error && (
           <div className="error-message">
