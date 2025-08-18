@@ -21,7 +21,7 @@ router.get('/', async (req, res) => {
   }
 });
 
-// GET /rooms/:id - Get a specific room (if you add an id column later)
+// GET /rooms/:name - Get a specific room by name
 router.get('/:name', async (req, res) => {
   try {
     const { name } = req.params;
@@ -70,11 +70,9 @@ router.post('/', async (req, res) => {
       });
     }
     
-    // Create room with current time
+    // Create room with current timestamp - FIXED SQL QUERY
     const result = await query(
-      `INSERT INTO "Rooms" (creator, name, created_at, attendance) 
-       VALUES ($1, $2, CURRENT_TIME, $3) 
-       RETURNING *`,
+      'INSERT INTO "Rooms" (creator, name, created_at, attendance) VALUES ($1, $2, CURRENT_TIMESTAMP, $3) RETURNING *',
       [creator, name, attendance]
     );
     

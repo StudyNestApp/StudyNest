@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react';
 import { supabase } from '../lib/supabaseClient';
 import type { User } from '@supabase/supabase-js';
+import CreateRoom from '../components/CreateRoom';
 import './../styles/Welcome.css';
 import dayjs from 'dayjs';
 import relativeTime from 'dayjs/plugin/relativeTime';
@@ -26,6 +27,7 @@ function Welcome() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
   const [currentTime, setCurrentTime] = useState(dayjs());
+  const [showCreateRoom, setShowCreateRoom] = useState(false); // New state for modal
 
   // Extend dayjs with relative time plugin
   dayjs.extend(relativeTime);
@@ -77,17 +79,34 @@ function Welcome() {
     window.location.href = '/'; // Redirect to auth form
   };
 
+  // New function to handle room creation
+  const handleRoomCreated = (newRoom: Room) => {
+    // Add the new room to the beginning of the list
+    setRooms(prevRooms => [newRoom, ...prevRooms]);
+    // Show success message (optional)
+    console.log('Room created successfully:', newRoom);
+  };
+
+  // New function to open create room modal
+  const handleCreateRoomClick = () => {
+    setShowCreateRoom(true);
+  };
+
+  // New function to close create room modal
+  const handleCloseCreateRoom = () => {
+    setShowCreateRoom(false);
+  };
+
   const formatDate = (dateString: string) => {
     // Debug logging
     console.log('Formatting date:', dateString, typeof dateString);
-    
+
     // Handle null, undefined, or empty strings
     if (!dateString) {
       return 'No date';
     }
 
     let date;
-
     // Check if it's a time-only string (HH:mm:ss format)
     const timeOnlyRegex = /^\d{1,2}:\d{2}(:\d{2})?$/;
     if (timeOnlyRegex.test(dateString)) {
@@ -100,13 +119,13 @@ function Welcome() {
       // Try to parse as a regular date/datetime
       date = dayjs(dateString);
     }
-    
+
     // Check if the date is valid
     if (!date || !date.isValid()) {
       console.warn('Invalid date received:', dateString);
       return 'Invalid date';
     }
-    
+
     // Return relative time that updates with currentTime state
     const relativeTime = date.from(currentTime);
     return `🕐 ${relativeTime}`;
@@ -130,7 +149,7 @@ function Welcome() {
         <div className="header-card">
           <div className="header-content">
             <h1 className="welcome-title">
-              Welcome, {user?.email?.split('@')[0] || 'User'}! 
+              Welcome, {user?.email?.split('@')[0] || 'User'}!
               <span style={{ color: 'initial' }}>👋</span>
             </h1>
             <p className="welcome-subtitle">Discover amazing study rooms and connect with fellow learners</p>
@@ -164,7 +183,7 @@ function Welcome() {
                 <div className="empty-icon">📚</div>
                 <h3 className="empty-title">No study rooms yet</h3>
                 <p className="empty-text">Be the pioneer and create the first study room!</p>
-                <button className="empty-btn">
+                <button className="empty-btn" onClick={handleCreateRoomClick}>
                   Create First Room 🚀
                 </button>
               </div>
@@ -233,7 +252,7 @@ function Welcome() {
 
         {/* Quick Actions */}
         <div className="quick-actions">
-          <button className="action-btn create">
+          <button className="action-btn create" onClick={handleCreateRoomClick}>
             <span>🏠</span>
             <span>Create New Room</span>
           </button>
@@ -247,6 +266,14 @@ function Welcome() {
           </button>
         </div>
       </div>
+
+      {/* Create Room Modal */}
+      <CreateRoom
+        user={user}
+        isOpen={showCreateRoom}
+        onClose={handleCloseCreateRoom}
+        onRoomCreated={handleRoomCreated}
+      />
     </div>
   );
 }
