@@ -3,6 +3,7 @@ import { supabase } from '../lib/supabaseClient';
 import type { User } from '@supabase/supabase-js';
 import './../styles/Welcome.css';
 import dayjs from 'dayjs';
+import relativeTime from 'dayjs/plugin/relativeTime';
 
 interface Room {
   creator: string;
@@ -24,6 +25,10 @@ function Welcome() {
   const [rooms, setRooms] = useState<Room[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
+  const [currentTime, setCurrentTime] = useState(dayjs());
+
+  // Extend dayjs with relative time plugin
+  dayjs.extend(relativeTime);
 
   useEffect(() => {
     // Get current user
@@ -33,6 +38,15 @@ function Welcome() {
     };
 
     getCurrentUser();
+  }, []);
+
+  useEffect(() => {
+    // Update current time every second for real-time relative time updates
+    const timer = setInterval(() => {
+      setCurrentTime(dayjs());
+    }, 1000);
+
+    return () => clearInterval(timer);
   }, []);
 
   useEffect(() => {
@@ -64,9 +78,39 @@ function Welcome() {
   };
 
   const formatDate = (dateString: string) => {
-    return dayjs(dateString).format('MMM D, YYYY HH:mm');
-  };
+    // Debug logging
+    console.log('Formatting date:', dateString, typeof dateString);
+    
+    // Handle null, undefined, or empty strings
+    if (!dateString) {
+      return 'No date';
+    }
 
+    let date;
+
+    // Check if it's a time-only string (HH:mm:ss format)
+    const timeOnlyRegex = /^\d{1,2}:\d{2}(:\d{2})?$/;
+    if (timeOnlyRegex.test(dateString)) {
+      // If it's just time, combine it with today's date for relative time calculation
+      const today = dayjs().format('YYYY-MM-DD');
+      const fullDateTimeString = `${today} ${dateString}`;
+      console.log('Converting time-only to full datetime:', fullDateTimeString);
+      date = dayjs(fullDateTimeString);
+    } else {
+      // Try to parse as a regular date/datetime
+      date = dayjs(dateString);
+    }
+    
+    // Check if the date is valid
+    if (!date || !date.isValid()) {
+      console.warn('Invalid date received:', dateString);
+      return 'Invalid date';
+    }
+    
+    // Return relative time that updates with currentTime state
+    const relativeTime = date.from(currentTime);
+    return `🕐 ${relativeTime}`;
+  };
 
   if (loading) {
     return (
@@ -138,7 +182,13 @@ function Welcome() {
                   </thead>
                   <tbody>
                     {rooms.map((room, index) => {
-                      console.log('Room created_at:', room.created_at); // log the raw value
+                      // Enhanced logging to debug the date issue
+                      console.log('Room data:', {
+                        name: room.name,
+                        created_at: room.created_at,
+                        created_at_type: typeof room.created_at,
+                        created_at_value: JSON.stringify(room.created_at)
+                      });
 
                       return (
                         <tr key={room.name} className="table-row">
