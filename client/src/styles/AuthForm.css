@@ -1,8 +1,16 @@
 :root {
   --teal-800: #0f766e;
+  --teal-700: #0d9488;
+  --teal-600: #0891b2;
   --blue-500: #3b82f6;
   --gray-300: #d1d5db;
+  --gray-200: #e5e7eb;
+  --gray-100: #f3f4f6;
   --red-500: #ef4444;
+  --white: #ffffff;
+  --shadow-sm: 0 1px 2px 0 rgb(0 0 0 / 0.05);
+  --shadow-md: 0 4px 6px -1px rgb(0 0 0 / 0.1), 0 2px 4px -2px rgb(0 0 0 / 0.1);
+  --shadow-lg: 0 10px 15px -3px rgb(0 0 0 / 0.1), 0 4px 6px -4px rgb(0 0 0 / 0.1);
 }
 
 /* Reset & lock page */
@@ -10,8 +18,8 @@ html, body {
   height: 100%;
   margin: 0;
   padding: 0;
-  overflow: hidden;        /* no scroll */
-  font-family: system-ui, sans-serif;
+  overflow: hidden;
+  font-family: system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
 }
 
 /* Full-screen container */
@@ -21,93 +29,227 @@ html, body {
   width: 100%;
   display: flex;
   justify-content: center;
-  align-items: center;   /* perfect vertical + horizontal center */
-  background: url('../assets/bg-auth.png') center center / cover no-repeat fixed;
+  align-items: center;
+  background: url('../assets/bg-auth.png') center center no-repeat;
+  background-size: 100% 100%;
+  box-sizing: border-box;
 }
 
-/* Transparent auth card */
+/* Transparent auth card - pure positioning container for background rectangle */
 .auth-card {
-  width: 100%;
-  max-width: clamp(300px, 35vw, 420px);
-  padding: clamp(1.5rem, 4vw, 2rem);
+  position: absolute;
+  top: 7.5vh;
+  left: 15vw;
+  right: 15vw;
+  bottom: 15vh;
+  
+  padding: 2vh 3vw;
+  
   display: flex;
   flex-direction: column;
-  align-items: stretch;
+  align-items: center;
+  justify-content: center; /* ✅ instead of space-between */
+  
   background: transparent;
+  z-index: 2;
+  overflow: hidden;
+  box-sizing: border-box;
 }
 
-/* Logo */
+/* NEW wrapper for logo + title + form */
+.auth-body {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 1vh; /* ✅ this controls spacing */
+  width: 100%;
+}
+
+/* Logo positioned within background rectangle */
 .logo {
-  width: clamp(8rem, 25vw, 12rem);
+  margin-bottom: 2%;
+  width: 8vw;
   height: auto;
   display: block;
-  margin: 0 auto 1rem;
 }
 
-/* Title */
-.title {
-  text-align: center;
-  font-size: clamp(1.25rem, 2.5vw, 1.5rem);
-  font-weight: 700;
-  color: var(--teal-800);
-  margin-bottom: 1rem;
-}
-
-/* Form stack */
+/* Enhanced form container */
 .form-stack {
   display: flex;
   flex-direction: column;
-  gap: clamp(0.6rem, 1.2vw, 1rem);
+  gap: 1.5vh;
+  flex: 1;
+  justify-content: flex-start; /* ✅ keep fields tight */
+  min-height: 0;
+  max-height: 45vh;
+  width: 100%;
 }
 
-/* Inputs */
+/* Form elements positioned within background rectangle - smaller size */
 .form-stack input {
   width: 100%;
-  padding: clamp(0.6rem, 1.2vw, 0.75rem) clamp(0.9rem, 1.5vw, 1rem);
-  border: 1px solid var(--gray-300);
-  border-radius: 0.5rem;
-  background: rgba(255, 255, 255, 0.7);
-  font-size: clamp(0.9rem, 1.5vw, 1rem);
+  padding: 1vh 1.5vw;
+  border: 2px solid var(--gray-300);
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.95);
+  font-size: 100%;
   outline: none;
+  box-sizing: border-box;
+  flex-shrink: 0;
+  transition: all 0.3s ease;
+  font-weight: 400;
+}
+
+.form-stack input::placeholder {
+  color: #9ca3af;
+  font-weight: 400;
 }
 
 .form-stack input:focus {
   border-color: var(--teal-800);
-  box-shadow: 0 0 0 3px rgba(15, 118, 110, 0.15);
+  box-shadow: 0 0 0 2px rgba(15, 118, 110, 0.15);
+  background: rgba(255, 255, 255, 1);
 }
 
-/* Error */
+/* Enhanced error styling - compact */
 .error {
   color: var(--red-500);
-  font-size: clamp(0.8rem, 1.2vw, 0.875rem);
+  font-size: 1.3vh;
+  flex-shrink: 0;
+  text-align: center;
+  font-weight: 500;
+  background: rgba(239, 68, 68, 0.1);
+  padding: 0.5vh 1vw;
+  border-radius: 6px;
+  border-left: 3px solid var(--red-500);
+  margin: 0.2vh 0;
 }
 
-/* Buttons */
+/* Shorter + narrower primary button */
 .primary-btn {
-  width: 100%;
+  width: auto !important;         /* not full width */
+  max-width: 200px;              /* ⬅️ adjust this number to control width */
+  padding: 0.8vh 2vw !important; /* balanced height + side padding */
+  font-size: 1.4vh !important;
+  border-radius: 8px !important;
+  font-weight: 600 !important;
+  letter-spacing: 0.3px !important;
+  transition: all 0.3s ease !important;
+  align-self: center;            /* center inside form */
 }
 
+/* Google button container - minimal spacing */
 .google-btn-row {
   display: flex;
-  justify-content: center;
+  flex-shrink: 0;
 }
 
-/* Switch */
+.google-btn-row > div {
+  transform: scale(0.9);
+  transform-origin: left center; /* shrink from the left edge */
+  display: inline-block;         /* ensures left alignment */
+}
+
+
+
+/* Switch text positioned within background rectangle - minimal margins */
 .switch-text {
   text-align: center;
-  font-size: clamp(0.8rem, 1.2vw, 0.9rem);
+  font-size: 90%;
   color: var(--teal-800);
+  flex-shrink: 1;
+  line-height: 1.2;
+  font-weight: 500;
+  margin: 0.2vh 0 0 0;
 }
 
 .switch-link {
   background: none;
   border: none;
   color: var(--blue-500);
-  text-decoration: underline;
+  text-decoration: none;
   cursor: pointer;
-  padding: 0;
+  padding: 4px 0;
+  font-weight: 600;
+  position: relative;
+  transition: color 0.3s ease;
 }
-.switch-link:disabled {
-  opacity: 0.6;
-  cursor: not-allowed;
+
+.switch-link::after {
+  content: '';
+  position: absolute;
+  left: 0;
+  bottom: -2px;
+  width: 100%;
+  height: 2px;
+  background-color: var(--blue-500);
+  transform: scaleX(0);
+  transform-origin: right;
+  transition: transform 0.3s ease;
+}
+
+.switch-link:hover {
+  color: var(--blue-600);
+}
+
+.switch-link:hover::after {
+  transform: scaleX(1);
+  transform-origin: left;
+}
+
+
+/* Enhanced responsive adjustments */
+@media (max-width: 768px) {
+  .auth-card {
+    left: 12vw;
+    right: 12vw;
+    top: 8vh;
+    bottom: 12vh;
+    padding: 1.5vh 2vw;
+  }
+  
+  .logo {
+    width: 12vw;
+    min-width: 60px;
+    max-width: 80px;
+  }
+  
+  .form-stack {
+    max-height: 50vh;
+  }
+}
+
+@media (max-width: 480px) {
+  .auth-card {
+    left: 8vw;
+    right: 8vw;
+    top: 8vh;
+    bottom: 10vh;
+    padding: 1.2vh 1.5vw;
+  }
+  
+  .form-stack {
+    gap: 1.2vh;
+    max-height: 55vh;
+  }
+  
+  .google-btn-row > div {
+    transform: scale(0.75);
+    
+  }
+}
+
+
+@media (min-width: 1200px) {
+  .auth-card {
+    left: 18vw;
+    right: 18vw;
+    top: 6vh;
+    bottom: 18vh;
+    padding: 2.5vh 3.5vw;
+  }
+  
+  .form-stack {
+    max-height: 48vh;
+  }
 }

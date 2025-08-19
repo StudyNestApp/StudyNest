@@ -64,7 +64,6 @@ function AuthForm({ onAuthSuccess }: AuthFormProps) {
     <div className="auth-container">
       <div className="auth-card">
         <img src={logo} alt="StudyNest" className="logo" />
-        <h2 className="title">{isLogin ? 'Login' : 'Register'}</h2>
 
         <div className="form-stack">
           <input

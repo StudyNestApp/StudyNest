@@ -200,7 +200,7 @@ function Welcome() {
                     </tr>
                   </thead>
                   <tbody>
-                    {rooms.map((room, index) => {
+                    {rooms.map((room) => {
                       // Enhanced logging to debug the date issue
                       console.log('Room data:', {
                         name: room.name,
@@ -256,14 +256,14 @@ function Welcome() {
             <span>🏠</span>
             <span>Create New Room</span>
           </button>
-          <button className="action-btn join">
+          {/* <button className="action-btn join">
             <span>🔗</span>
             <span>Join by Code</span>
           </button>
           <button className="action-btn browse">
             <span>🔍</span>
             <span>Browse All</span>
-          </button>
+          </button> */}
         </div>
       </div>
 

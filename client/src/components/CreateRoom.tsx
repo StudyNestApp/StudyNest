@@ -1,5 +1,4 @@
 import { useState } from 'react';
-import { supabase } from '../lib/supabaseClient';
 import type { User } from '@supabase/supabase-js';
 import './../styles/CreateRoom.css';
 
