@@ -2,6 +2,7 @@ import { useState, useEffect } from 'react';
 import { supabase } from '../lib/supabaseClient';
 import type { User } from '@supabase/supabase-js';
 import CreateRoom from '../components/CreateRoom';
+import VideoRoom from './VideoRoom';
 import './../styles/Welcome.css';
 import dayjs from 'dayjs';
 import relativeTime from 'dayjs/plugin/relativeTime';
@@ -11,12 +12,13 @@ interface Room {
   name: string;
   created_at: string;
   attendance: number;
+  video_url?: string; // Add video_url field
 }
 
 interface ApiResponse {
   success: boolean;
-  data: Room[];
-  count: number;
+  data: Room | Room[];
+  count?: number;
   error?: string;
   message?: string;
 }
@@ -27,7 +29,11 @@ function Welcome() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
   const [currentTime, setCurrentTime] = useState(dayjs());
-  const [showCreateRoom, setShowCreateRoom] = useState(false); // New state for modal
+  const [showCreateRoom, setShowCreateRoom] = useState(false);
+  
+  // Video room states
+  const [currentVideoRoom, setCurrentVideoRoom] = useState<Room | null>(null);
+  const [showVideoRoom, setShowVideoRoom] = useState(false);
 
   // Extend dayjs with relative time plugin
   dayjs.extend(relativeTime);
@@ -58,7 +64,7 @@ function Welcome() {
         const response = await fetch('http://localhost:5000/rooms');
         const data: ApiResponse = await response.json();
         
-        if (data.success) {
+        if (data.success && Array.isArray(data.data)) {
           setRooms(data.data);
         } else {
           setError(data.error || 'Failed to fetch rooms');
@@ -79,28 +85,94 @@ function Welcome() {
     window.location.href = '/'; // Redirect to auth form
   };
 
-  // New function to handle room creation
+  // Handle room creation
   const handleRoomCreated = (newRoom: Room) => {
     // Add the new room to the beginning of the list
     setRooms(prevRooms => [newRoom, ...prevRooms]);
-    // Show success message (optional)
     console.log('Room created successfully:', newRoom);
   };
 
-  // New function to open create room modal
+  // Open create room modal
   const handleCreateRoomClick = () => {
     setShowCreateRoom(true);
   };
 
-  // New function to close create room modal
+  // Close create room modal
   const handleCloseCreateRoom = () => {
     setShowCreateRoom(false);
   };
 
-  const formatDate = (dateString: string) => {
-    // Debug logging
-    console.log('Formatting date:', dateString, typeof dateString);
+  // Handle joining a room
+  const handleJoinRoom = async (room: Room) => {
+    if (!room.video_url) {
+      setError('Room video URL not available');
+      return;
+    }
 
+    try {
+      // Join the room (increment attendance)
+      const response = await fetch(`http://localhost:5000/rooms/${room.name}/join`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+      });
+
+      const data: ApiResponse = await response.json();
+
+      if (data.success && data.data && !Array.isArray(data.data)) {
+        // Update local rooms state
+        setRooms(prevRooms => 
+          prevRooms.map(r => 
+            r.name === room.name ? data.data as Room : r
+          )
+        );
+
+        // Set current video room and show video interface
+        setCurrentVideoRoom(data.data as Room);
+        setShowVideoRoom(true);
+      } else {
+        setError(data.error || 'Failed to join room');
+      }
+    } catch (err) {
+      console.error('Error joining room:', err);
+      setError('Failed to join room');
+    }
+  };
+
+  // Handle leaving video room
+  const handleLeaveVideoRoom = async () => {
+    if (!currentVideoRoom) return;
+
+    try {
+      // Leave the room (decrement attendance)
+      const response = await fetch(`http://localhost:5000/rooms/${currentVideoRoom.name}/leave`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+      });
+
+      const data: ApiResponse = await response.json();
+
+      if (data.success && data.data && !Array.isArray(data.data)) {
+        // Update local rooms state
+        setRooms(prevRooms => 
+          prevRooms.map(r => 
+            r.name === currentVideoRoom.name ? data.data as Room : r
+          )
+        );
+      }
+    } catch (err) {
+      console.error('Error leaving room:', err);
+    } finally {
+      // Always close video room UI
+      setCurrentVideoRoom(null);
+      setShowVideoRoom(false);
+    }
+  };
+
+  const formatDate = (dateString: string) => {
     // Handle null, undefined, or empty strings
     if (!dateString) {
       return 'No date';
@@ -113,7 +185,6 @@ function Welcome() {
       // If it's just time, combine it with today's date for relative time calculation
       const today = dayjs().format('YYYY-MM-DD');
       const fullDateTimeString = `${today} ${dateString}`;
-      console.log('Converting time-only to full datetime:', fullDateTimeString);
       date = dayjs(fullDateTimeString);
     } else {
       // Try to parse as a regular date/datetime
@@ -130,6 +201,17 @@ function Welcome() {
     const relativeTime = date.from(currentTime);
     return `🕐 ${relativeTime}`;
   };
+
+  // Show video room if user is in one
+  if (showVideoRoom && currentVideoRoom && user) {
+    return (
+      <VideoRoom
+        roomId={currentVideoRoom.video_url!} // Use video_url as room ID
+        user={user}
+        onLeave={handleLeaveVideoRoom}
+      />
+    );
+  }
 
   if (loading) {
     return (
@@ -163,6 +245,7 @@ function Welcome() {
         {error && (
           <div className="error-message">
             <p className="error-text">⚠️ {error}</p>
+            <button onClick={() => setError('')} className="error-close">✕</button>
           </div>
         )}
 
@@ -200,49 +283,45 @@ function Welcome() {
                     </tr>
                   </thead>
                   <tbody>
-                    {rooms.map((room) => {
-                      // Enhanced logging to debug the date issue
-                      console.log('Room data:', {
-                        name: room.name,
-                        created_at: room.created_at,
-                        created_at_type: typeof room.created_at,
-                        created_at_value: JSON.stringify(room.created_at)
-                      });
-
-                      return (
-                        <tr key={room.name} className="table-row">
-                          <td className="table-cell">
-                            <div className="room-name-cell">
-                              <div className="room-avatar">
-                                {room.name.charAt(0).toUpperCase()}
-                              </div>
-                              <div className="room-name">{room.name}</div>
+                    {rooms.map((room) => (
+                      <tr key={room.name} className="table-row">
+                        <td className="table-cell">
+                          <div className="room-name-cell">
+                            <div className="room-avatar">
+                              {room.name.charAt(0).toUpperCase()}
                             </div>
-                          </td>
-                          <td className="table-cell">
-                            <div className="creator-cell">
-                              <div className="creator-avatar">
-                                {room.creator.charAt(0).toUpperCase()}
-                              </div>
-                              <span className="creator-name">{room.creator}</span>
+                            <div className="room-name">{room.name}</div>
+                          </div>
+                        </td>
+                        <td className="table-cell">
+                          <div className="creator-cell">
+                            <div className="creator-avatar">
+                              {room.creator.charAt(0).toUpperCase()}
                             </div>
-                          </td>
-                          <td className="table-cell">
-                            <span className="attendance-badge">
-                              👥 {room.attendance} {room.attendance === 1 ? 'student' : 'students'}
-                            </span>
-                          </td>
-                          <td className="table-cell">
-                            <div className="date-cell">
-                              <div className="date-text">📅 {formatDate(room.created_at)}</div>
-                            </div>
-                          </td>
-                          <td className="table-cell">
-                            <button className="join-btn">Join Room 🚀</button>
-                          </td>
-                        </tr>
-                      );
-                    })}
+                            <span className="creator-name">{room.creator}</span>
+                          </div>
+                        </td>
+                        <td className="table-cell">
+                          <span className="attendance-badge">
+                            👥 {room.attendance} {room.attendance === 1 ? 'student' : 'students'}
+                          </span>
+                        </td>
+                        <td className="table-cell">
+                          <div className="date-cell">
+                            <div className="date-text">📅 {formatDate(room.created_at)}</div>
+                          </div>
+                        </td>
+                        <td className="table-cell">
+                          <button 
+                            className="join-btn"
+                            onClick={() => handleJoinRoom(room)}
+                            disabled={!room.video_url}
+                          >
+                            {room.video_url ? 'Join Room 🚀' : 'Room Not Ready'}
+                          </button>
+                        </td>
+                      </tr>
+                    ))}
                   </tbody>
                 </table>
               </div>
@@ -256,14 +335,6 @@ function Welcome() {
             <span>🏠</span>
             <span>Create New Room</span>
           </button>
-          {/* <button className="action-btn join">
-            <span>🔗</span>
-            <span>Join by Code</span>
-          </button>
-          <button className="action-btn browse">
-            <span>🔍</span>
-            <span>Browse All</span>
-          </button> */}
         </div>
       </div>
 
