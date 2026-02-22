@@ -1,7 +1,6 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { io, Socket } from 'socket.io-client';
 import { SERVER_URL } from '../lib/serverConfig';
-import { initDebugPanel } from '../lib/debugPanel';
 import type { User } from '@supabase/supabase-js';
 import './../styles/VideoRoom.css';
 
@@ -29,6 +28,37 @@ interface VideoRoomProps {
   onLeave: () => void;
 }
 
+interface UserLeftPayload {
+  userId: string;
+  userName: string;
+  socketId?: string;
+}
+
+interface ParticipantMediaChangedPayload {
+  userId: string;
+  socketId?: string;
+  isVideoEnabled: boolean;
+  isAudioEnabled: boolean;
+}
+
+interface OfferPayload {
+  offer: RTCSessionDescriptionInit;
+  fromUserId: string;
+  fromSocketId: string;
+}
+
+interface AnswerPayload {
+  answer: RTCSessionDescriptionInit;
+  fromUserId: string;
+  fromSocketId: string;
+}
+
+interface IceCandidatePayload {
+  candidate: RTCIceCandidateInit;
+  fromUserId: string;
+  fromSocketId: string;
+}
+
 // WebRTC configuration
 const rtcConfig = {
   iceServers: [
@@ -38,7 +68,6 @@ const rtcConfig = {
 };
 
 const VideoRoom: React.FC<VideoRoomProps> = ({ roomId, roomName: roomNameProp, user, onLeave }) => {
-  const [socket, setSocket] = useState<Socket | null>(null);
   const [participants, setParticipants] = useState<Map<string, Participant>>(new Map());
   const [localStream, setLocalStream] = useState<MediaStream | null>(null);
   const [isVideoEnabled, setIsVideoEnabled] = useState(true);
@@ -49,17 +78,15 @@ const VideoRoom: React.FC<VideoRoomProps> = ({ roomId, roomName: roomNameProp, u
   const [showChat, setShowChat] = useState(false);
   const [isConnecting, setIsConnecting] = useState(true);
   const [roomName, setRoomName] = useState('');
+  const [localSocketId, setLocalSocketId] = useState('');
 
   const localVideoRef = useRef<HTMLVideoElement>(null);
   const peerConnections = useRef<Map<string, RTCPeerConnection>>(new Map());
   const chatContainerRef = useRef<HTMLDivElement>(null);
   const socketRef = useRef<Socket | null>(null);
+  const localSocketIdRef = useRef('');
+  const localStreamRef = useRef<MediaStream | null>(null);
   const pendingCandidates = useRef<Map<string, RTCIceCandidateInit[]>>(new Map());
-
-  useEffect(() => {
-    initializeVideoRoom();
-    return () => cleanup();
-  }, []);
 
   useEffect(() => {
     // Auto-scroll chat to bottom
@@ -68,134 +95,59 @@ const VideoRoom: React.FC<VideoRoomProps> = ({ roomId, roomName: roomNameProp, u
     }
   }, [chatMessages]);
 
-  const initializeVideoRoom = async () => {
-    try {
-      // Get user media
-      const stream = await navigator.mediaDevices.getUserMedia({
-        video: true,
-        audio: true,
-      });
-
-      setLocalStream(stream);
-      if (localVideoRef.current) {
-        localVideoRef.current.srcObject = stream;
-      }
-
-      // Initialize Socket.io connection
-      const socketConnection = io(SERVER_URL);
-      setSocket(socketConnection);
-      socketRef.current = socketConnection;
-
-      // Use roomId as the room identifier for Socket.io
-      const userName = user.email?.split('@')[0] || 'Anonymous';
-      setRoomName(roomId.substring(0, 8)); // Show shortened room ID
-      
-      // Add current user to participants
-      setParticipants(prev => {
-        const newParticipants = new Map(prev);
-        newParticipants.set(user.id, {
-          id: user.id,
-          name: userName,
-          socketId: socketConnection.id || '',
-          isVideoEnabled: true,
-          isAudioEnabled: true,
-          stream: stream
-        });
-        return newParticipants;
-      });
-      
-      // Join the room using the video_url as room identifier
-      socketConnection.emit('join-room', roomId, user.id, userName);
-
-      setupSocketListeners(socketConnection, stream);
-      setIsConnecting(false);
-
-    } catch (error) {
-      console.error('Error initializing video room:', error);
-      setIsConnecting(false);
-      // Handle permission denied or other errors
-      alert('Failed to access camera/microphone. Please check permissions.');
+  const attachLocalPreview = useCallback(async (stream: MediaStream) => {
+    const videoElement = localVideoRef.current;
+    if (!videoElement) {
+      return;
     }
-  };
 
-  const setupSocketListeners = (socketConnection: Socket, stream: MediaStream) => {
-    // Handle existing participants
-    socketConnection.on('existing-participants', (existingParticipants: Participant[]) => {
-      console.log('Existing participants:', existingParticipants);
-      existingParticipants.forEach(participant => {
-        createPeerConnection(participant, stream, true); // true = initiator
-      });
-    });
+    if (videoElement.srcObject !== stream) {
+      videoElement.srcObject = stream;
+    }
 
-    // Handle new user joined
-    socketConnection.on('user-joined', (participant: Participant) => {
-      console.log('User joined:', participant);
-      createPeerConnection(participant, stream, false); // false = not initiator
-    });
+    videoElement.muted = true;
+    videoElement.playsInline = true;
+    videoElement.setAttribute('playsinline', 'true');
 
-    // Handle user left
-    socketConnection.on('user-left', (data: { userId: string; userName: string }) => {
-      console.log('User left:', data);
-      const peerConnection = peerConnections.current.get(data.userId);
-      if (peerConnection) {
-        peerConnection.close();
-        peerConnections.current.delete(data.userId);
-      }
-      
-      // Clean up pending candidates
-      pendingCandidates.current.delete(data.userId);
-      
-      setParticipants(prev => {
-        const newParticipants = new Map(prev);
-        newParticipants.delete(data.userId);
-        return newParticipants;
-      });
-    });
+    try {
+      await videoElement.play();
+    } catch (playError) {
+      console.warn('Local preview autoplay was blocked, retrying on metadata load', playError);
+      videoElement.onloadedmetadata = () => {
+        videoElement.play().catch(err => {
+          console.warn('Unable to auto-play local preview:', err);
+        });
+      };
+    }
+  }, []);
 
-    // Handle WebRTC signaling
-    socketConnection.on('offer', handleOffer);
-    socketConnection.on('answer', handleAnswer);
-    socketConnection.on('ice-candidate', handleIceCandidate);
+  useEffect(() => {
+    if (!isScreenSharing && localStream) {
+      attachLocalPreview(localStream);
+    }
+  }, [attachLocalPreview, isConnecting, isScreenSharing, localStream]);
 
-    // Handle media changes
-    socketConnection.on('participant-media-changed', (data) => {
-      setParticipants(prev => {
-        const newParticipants = new Map(prev);
-        const participant = newParticipants.get(data.userId);
-        if (participant) {
-          participant.isVideoEnabled = data.isVideoEnabled;
-          participant.isAudioEnabled = data.isAudioEnabled;
-        }
-        return newParticipants;
-      });
-    });
+  useEffect(() => {
+    if (!isScreenSharing && localVideoRef.current && localStream) {
+      localVideoRef.current.srcObject = localStream;
+    }
+  }, [isScreenSharing, localStream]);
 
-    // Handle chat messages
-    socketConnection.on('chat-message', (message: ChatMessage) => {
-      setChatMessages(prev => [...prev, message]);
-    });
+  const createPeerConnection = useCallback(async (participant: Participant, stream: MediaStream, isInitiator: boolean) => {
+    if (participant.socketId === localSocketIdRef.current) {
+      return;
+    }
 
-    // Handle screen sharing events
-    socketConnection.on('user-started-screen-share', (data) => {
-      console.log(`${data.userName} started screen sharing`);
-      // You can show a notification or update UI here
-    });
+    const peerKey = participant.socketId || participant.id;
 
-    socketConnection.on('user-stopped-screen-share', (data) => {
-      console.log(`${data.userName} stopped screen sharing`);
-      // You can show a notification or update UI here
-    });
-  };
-
-  const createPeerConnection = async (participant: Participant, stream: MediaStream, isInitiator: boolean) => {
     // Skip if peer connection already exists (prevent duplicates)
-    if (peerConnections.current.has(participant.id)) {
+    if (peerConnections.current.has(peerKey)) {
       console.log(`Peer connection already exists for ${participant.name}`);
       return;
     }
 
     const peerConnection = new RTCPeerConnection(rtcConfig);
-    peerConnections.current.set(participant.id, peerConnection);
+    peerConnections.current.set(peerKey, peerConnection);
 
     // Add local stream tracks to peer connection
     console.log(`📤 Adding local tracks to peer connection with ${participant.name}`);
@@ -216,14 +168,14 @@ const VideoRoom: React.FC<VideoRoomProps> = ({ roomId, roomName: roomNameProp, u
         
         setParticipants(prev => {
           const newParticipants = new Map(prev);
-          const existingParticipant = newParticipants.get(participant.id);
+          const existingParticipant = newParticipants.get(peerKey);
           if (existingParticipant) {
             console.log(`✅ Updated existing participant ${participant.name} with stream`);
             // Create NEW object so React detects the change
-            newParticipants.set(participant.id, { ...existingParticipant, stream: remoteStream });
+            newParticipants.set(peerKey, { ...existingParticipant, stream: remoteStream });
           } else {
             console.log(`➕ Added new participant ${participant.name} with stream`);
-            newParticipants.set(participant.id, { ...participant, stream: remoteStream });
+            newParticipants.set(peerKey, { ...participant, stream: remoteStream });
           }
           return newParticipants;
         });
@@ -270,7 +222,6 @@ const VideoRoom: React.FC<VideoRoomProps> = ({ roomId, roomName: roomNameProp, u
         console.log(`   📧 Sending offer to ${participant.name}`);
         socketRef.current?.emit('offer', {
           offer,
-          targetUserId: participant.id,
           targetSocketId: participant.socketId
         });
       } catch (error) {
@@ -283,14 +234,15 @@ const VideoRoom: React.FC<VideoRoomProps> = ({ roomId, roomName: roomNameProp, u
     // Add participant to state
     setParticipants(prev => {
       const newParticipants = new Map(prev);
-      newParticipants.set(participant.id, participant);
+      newParticipants.set(peerKey, participant);
       return newParticipants;
     });
-  };
+  }, []);
 
-  const handleOffer = async (data: any) => {
-    console.log(`📨 Received offer from ${data.fromUserId}`);
-    const peerConnection = peerConnections.current.get(data.fromUserId);
+  const handleOffer = useCallback(async (data: OfferPayload) => {
+    const peerKey = data.fromSocketId || data.fromUserId;
+    console.log(`📨 Received offer from ${peerKey}`);
+    const peerConnection = peerConnections.current.get(peerKey);
     if (peerConnection) {
       try {
         console.log(`   Setting remote description...`);
@@ -301,7 +253,7 @@ const VideoRoom: React.FC<VideoRoomProps> = ({ roomId, roomName: roomNameProp, u
         console.log(`   ✅ Answer created and set as local description`);
         
         // Add any pending ICE candidates now that remote description is set
-        const pending = pendingCandidates.current.get(data.fromUserId);
+        const pending = pendingCandidates.current.get(peerKey);
         if (pending) {
           console.log(`   Adding ${pending.length} pending ICE candidates`);
           for (const candidate of pending) {
@@ -311,24 +263,24 @@ const VideoRoom: React.FC<VideoRoomProps> = ({ roomId, roomName: roomNameProp, u
               console.error('Error adding queued ICE candidate:', err);
             }
           }
-          pendingCandidates.current.delete(data.fromUserId);
+          pendingCandidates.current.delete(peerKey);
         }
         
-        console.log(`   📤 Sending answer to ${data.fromUserId}`);
+        console.log(`   📤 Sending answer to ${peerKey}`);
         socketRef.current?.emit('answer', {
           answer,
-          targetUserId: data.fromUserId,
           targetSocketId: data.fromSocketId
         });
       } catch (error) {
         console.error('Error handling offer:', error);
       }
     }
-  };
+  }, []);
 
-  const handleAnswer = async (data: any) => {
-    console.log(`📬 Received answer from ${data.fromUserId}`);
-    const peerConnection = peerConnections.current.get(data.fromUserId);
+  const handleAnswer = useCallback(async (data: AnswerPayload) => {
+    const peerKey = data.fromSocketId || data.fromUserId;
+    console.log(`📬 Received answer from ${peerKey}`);
+    const peerConnection = peerConnections.current.get(peerKey);
     if (peerConnection) {
       try {
         console.log(`   Setting remote description from answer...`);
@@ -336,7 +288,7 @@ const VideoRoom: React.FC<VideoRoomProps> = ({ roomId, roomName: roomNameProp, u
         console.log(`   ✅ Remote description set from answer`);
         
         // Add any pending ICE candidates now that remote description is set
-        const pending = pendingCandidates.current.get(data.fromUserId);
+        const pending = pendingCandidates.current.get(peerKey);
         if (pending) {
           console.log(`   Adding ${pending.length} pending ICE candidates`);
           for (const candidate of pending) {
@@ -346,16 +298,17 @@ const VideoRoom: React.FC<VideoRoomProps> = ({ roomId, roomName: roomNameProp, u
               console.error('Error adding queued ICE candidate:', err);
             }
           }
-          pendingCandidates.current.delete(data.fromUserId);
+          pendingCandidates.current.delete(peerKey);
         }
       } catch (error) {
         console.error('Error handling answer:', error);
       }
     }
-  };
+  }, []);
 
-  const handleIceCandidate = async (data: any) => {
-    const peerConnection = peerConnections.current.get(data.fromUserId);
+  const handleIceCandidate = useCallback(async (data: IceCandidatePayload) => {
+    const peerKey = data.fromSocketId || data.fromUserId;
+    const peerConnection = peerConnections.current.get(peerKey);
     if (peerConnection) {
       try {
         // Check if remote description is set
@@ -363,17 +316,80 @@ const VideoRoom: React.FC<VideoRoomProps> = ({ roomId, roomName: roomNameProp, u
           await peerConnection.addIceCandidate(data.candidate);
         } else {
           // Queue the candidate for later
-          if (!pendingCandidates.current.has(data.fromUserId)) {
-            pendingCandidates.current.set(data.fromUserId, []);
+          if (!pendingCandidates.current.has(peerKey)) {
+            pendingCandidates.current.set(peerKey, []);
           }
-          pendingCandidates.current.get(data.fromUserId)!.push(data.candidate);
-          console.log(`Queued ICE candidate for ${data.fromUserId} (remote description not yet set)`);
+          pendingCandidates.current.get(peerKey)!.push(data.candidate);
+          console.log(`Queued ICE candidate for ${peerKey} (remote description not yet set)`);
         }
       } catch (error) {
         console.error('Error adding ICE candidate:', error);
       }
     }
-  };
+  }, []);
+
+  const setupSocketListeners = useCallback((socketConnection: Socket, stream: MediaStream) => {
+    // Handle existing participants
+    socketConnection.on('existing-participants', (existingParticipants: Participant[]) => {
+      console.log('Existing participants:', existingParticipants);
+      existingParticipants.forEach(participant => {
+        createPeerConnection(participant, stream, true); // true = initiator
+      });
+    });
+
+    // Handle new user joined
+    socketConnection.on('user-joined', (participant: Participant) => {
+      console.log('User joined:', participant);
+      createPeerConnection(participant, stream, false); // false = not initiator
+    });
+
+    // Handle user left
+    socketConnection.on('user-left', (data: UserLeftPayload) => {
+      console.log('User left:', data);
+      const peerKey = data.socketId || data.userId;
+      const peerConnection = peerConnections.current.get(peerKey);
+      if (peerConnection) {
+        peerConnection.close();
+        peerConnections.current.delete(peerKey);
+      }
+
+      pendingCandidates.current.delete(peerKey);
+
+      setParticipants(prev => {
+        const newParticipants = new Map(prev);
+        newParticipants.delete(peerKey);
+        return newParticipants;
+      });
+    });
+
+    socketConnection.on('offer', handleOffer);
+    socketConnection.on('answer', handleAnswer);
+    socketConnection.on('ice-candidate', handleIceCandidate);
+
+    socketConnection.on('participant-media-changed', (data: ParticipantMediaChangedPayload) => {
+      setParticipants(prev => {
+        const newParticipants = new Map(prev);
+        const participant = newParticipants.get(data.socketId || data.userId);
+        if (participant) {
+          participant.isVideoEnabled = data.isVideoEnabled;
+          participant.isAudioEnabled = data.isAudioEnabled;
+        }
+        return newParticipants;
+      });
+    });
+
+    socketConnection.on('chat-message', (message: ChatMessage) => {
+      setChatMessages(prev => [...prev, message]);
+    });
+
+    socketConnection.on('user-started-screen-share', (data) => {
+      console.log(`${data.userName} started screen sharing`);
+    });
+
+    socketConnection.on('user-stopped-screen-share', (data) => {
+      console.log(`${data.userName} stopped screen sharing`);
+    });
+  }, [createPeerConnection, handleAnswer, handleIceCandidate, handleOffer]);
 
   const toggleVideo = () => {
     if (localStream) {
@@ -506,8 +522,9 @@ const VideoRoom: React.FC<VideoRoomProps> = ({ roomId, roomName: roomNameProp, u
     pendingCandidates.current.clear();
 
     // Stop local stream
-    if (localStream) {
-      localStream.getTracks().forEach(track => track.stop());
+    if (localStreamRef.current) {
+      localStreamRef.current.getTracks().forEach(track => track.stop());
+      localStreamRef.current = null;
     }
 
     // Clear participants
@@ -518,6 +535,102 @@ const VideoRoom: React.FC<VideoRoomProps> = ({ roomId, roomName: roomNameProp, u
       socketRef.current.disconnect();
     }
   };
+
+  useEffect(() => {
+    let cancelled = false;
+    let streamForCleanup: MediaStream | null = null;
+    const peerConnectionsMap = peerConnections.current;
+    const pendingCandidatesMap = pendingCandidates.current;
+
+    const initialize = async () => {
+      try {
+        const stream = await navigator.mediaDevices.getUserMedia({
+          video: true,
+          audio: true,
+        });
+
+        if (cancelled) {
+          stream.getTracks().forEach(track => track.stop());
+          return;
+        }
+
+        streamForCleanup = stream;
+        localStreamRef.current = stream;
+        setLocalStream(stream);
+
+        await attachLocalPreview(stream);
+
+        const socketConnection = io(SERVER_URL);
+        socketRef.current = socketConnection;
+
+        const userName = user.email?.split('@')[0] || 'Anonymous';
+        setRoomName(roomId.substring(0, 8));
+        setupSocketListeners(socketConnection, stream);
+
+        const joinRoom = () => {
+          const currentSocketId = socketConnection.id;
+          if (!currentSocketId || cancelled) {
+            return;
+          }
+
+          setLocalSocketId(currentSocketId);
+          localSocketIdRef.current = currentSocketId;
+          setParticipants(prev => {
+            const newParticipants = new Map(prev);
+            newParticipants.set(currentSocketId, {
+              id: user.id,
+              name: userName,
+              socketId: currentSocketId,
+              isVideoEnabled: true,
+              isAudioEnabled: true,
+              stream,
+            });
+            return newParticipants;
+          });
+
+          socketConnection.emit('join-room', roomId, user.id, userName);
+          setIsConnecting(false);
+        };
+
+        if (socketConnection.connected) {
+          joinRoom();
+        } else {
+          socketConnection.once('connect', joinRoom);
+        }
+
+        socketConnection.on('connect_error', (err) => {
+          console.error('Socket connection error:', err);
+          setIsConnecting(false);
+        });
+      } catch (error) {
+        console.error('Error initializing video room:', error);
+        setIsConnecting(false);
+        alert('Failed to access camera/microphone. Please check permissions.');
+      }
+    };
+
+    initialize();
+
+    return () => {
+      cancelled = true;
+
+      peerConnectionsMap.forEach(peerConnection => {
+        peerConnection.close();
+      });
+      peerConnectionsMap.clear();
+      pendingCandidatesMap.clear();
+
+      if (streamForCleanup) {
+        streamForCleanup.getTracks().forEach(track => track.stop());
+      }
+
+      if (socketRef.current) {
+        socketRef.current.disconnect();
+      }
+
+      localSocketIdRef.current = '';
+    };
+  }, [attachLocalPreview, roomId, setupSocketListeners, user.email, user.id]);
 
   if (isConnecting) {
     return (
@@ -563,9 +676,9 @@ const VideoRoom: React.FC<VideoRoomProps> = ({ roomId, roomName: roomNameProp, u
 
           {/* Remote videos */}
           {Array.from(participants.values())
-            .filter(participant => participant.id !== user.id) // Exclude self from remote videos
+            .filter(participant => participant.socketId !== localSocketId) // Exclude this device from remote videos
             .map(participant => (
-              <ParticipantVideo key={participant.id} participant={participant} />
+              <ParticipantVideo key={participant.socketId} participant={participant} />
             ))}
         </div>
 

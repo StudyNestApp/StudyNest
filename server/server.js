@@ -84,6 +84,17 @@ io.on('connection', (socket) => {
     }
 
     const room = videoRooms.get(roomName);
+    const socketsInRoom = io.sockets.adapter.rooms.get(roomName) || new Set();
+
+    // Prune stale participants (e.g. after reconnects/abrupt disconnects)
+    for (const [participantSocketId] of room.entries()) {
+      const isSocketConnected = io.sockets.sockets.has(participantSocketId);
+      const isSocketInRoom = socketsInRoom.has(participantSocketId);
+      if (!isSocketConnected || !isSocketInRoom) {
+        room.delete(participantSocketId);
+      }
+    }
+
     const currentSize = room.size;
     console.log(`   Current participants: ${currentSize}`);
     
@@ -94,8 +105,8 @@ io.on('connection', (socket) => {
       console.log(`      Participants: ${existingParticipants.map(p => p.name).join(', ')}`);
     }
     
-    // Add current user to room
-    room.set(userId, {
+    // Add current socket connection to room (supports same user on multiple devices)
+    room.set(socket.id, {
       id: userId,
       name: userName,
       socketId: socket.id,
@@ -158,7 +169,7 @@ io.on('connection', (socket) => {
     if (userInfo) {
       const room = videoRooms.get(userInfo.roomName);
       if (room) {
-        const participant = room.get(userInfo.userId);
+        const participant = room.get(socket.id);
         if (participant) {
           if (data.video !== undefined) participant.isVideoEnabled = data.video;
           if (data.audio !== undefined) participant.isAudioEnabled = data.audio;
@@ -166,6 +177,7 @@ io.on('connection', (socket) => {
           // Notify others about media changes
           socket.to(userInfo.roomName).emit('participant-media-changed', {
             userId: userInfo.userId,
+            socketId: socket.id,
             isVideoEnabled: participant.isVideoEnabled,
             isAudioEnabled: participant.isAudioEnabled
           });
@@ -223,7 +235,7 @@ io.on('connection', (socket) => {
       // Remove from video room
       const room = videoRooms.get(roomName);
       if (room) {
-        room.delete(userId);
+        room.delete(socket.id);
         
         // Update database attendance
         updateRoomAttendance(roomName, room.size);
@@ -234,7 +246,7 @@ io.on('connection', (socket) => {
         }
         
         // Notify others
-        socket.to(roomName).emit('user-left', { userId, userName });
+        socket.to(roomName).emit('user-left', { userId, userName, socketId: socket.id });
       }
       
       // Clean up socket mapping
