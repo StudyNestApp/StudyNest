@@ -1,7 +1,9 @@
 import { useState, useEffect } from 'react';
 import { supabase } from '../lib/supabaseClient';
+import { SERVER_URL } from '../lib/serverConfig';
 import type { User } from '@supabase/supabase-js';
 import CreateRoom from '../components/CreateRoom';
+
 import VideoRoom from './VideoRoom';
 import './../styles/Welcome.css';
 import dayjs from 'dayjs';
@@ -61,7 +63,7 @@ function Welcome() {
     // Fetch rooms from backend
     const fetchRooms = async () => {
       try {
-        const response = await fetch('http://localhost:5000/rooms');
+        const response = await fetch(`${SERVER_URL}/rooms`);
         const data: ApiResponse = await response.json();
         
         if (data.success && Array.isArray(data.data)) {
@@ -111,7 +113,7 @@ function Welcome() {
 
     try {
       // Join the room (increment attendance)
-      const response = await fetch(`http://localhost:5000/rooms/${room.name}/join`, {
+      const response = await fetch(`${SERVER_URL}/rooms/${room.name}/join`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -145,8 +147,9 @@ function Welcome() {
     if (!currentVideoRoom) return;
 
     try {
-      // Leave the room (decrement attendance)
-      const response = await fetch(`http://localhost:5000/rooms/${currentVideoRoom.name}/leave`, {
+      // Try to leave the room (decrement attendance)
+      // If room was deleted, this will fail gracefully
+      const response = await fetch(`${SERVER_URL}/rooms/${currentVideoRoom.name}/leave`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -162,9 +165,24 @@ function Welcome() {
             r.name === currentVideoRoom.name ? data.data as Room : r
           )
         );
+      } else if (response.status === 404) {
+        // Room was deleted, remove it from local state
+        setRooms(prevRooms => 
+          prevRooms.filter(r => r.name !== currentVideoRoom.name)
+        );
       }
     } catch (err) {
       console.error('Error leaving room:', err);
+      // If there's an error, try to refetch rooms to sync state
+      try {
+        const response = await fetch(`${SERVER_URL}/rooms`);
+        const data: ApiResponse = await response.json();
+        if (data.success && Array.isArray(data.data)) {
+          setRooms(data.data);
+        }
+      } catch (refetchErr) {
+        console.error('Error refetching rooms:', refetchErr);
+      }
     } finally {
       // Always close video room UI
       setCurrentVideoRoom(null);
@@ -207,6 +225,7 @@ function Welcome() {
     return (
       <VideoRoom
         roomId={currentVideoRoom.video_url!} // Use video_url as room ID
+        roomName={currentVideoRoom.name} // Pass room name for deletion
         user={user}
         onLeave={handleLeaveVideoRoom}
       />

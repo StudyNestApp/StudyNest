@@ -1,4 +1,5 @@
 import { useState } from 'react';
+import { SERVER_URL } from '../lib/serverConfig';
 import type { User } from '@supabase/supabase-js';
 import './../styles/CreateRoom.css';
 
@@ -54,7 +55,7 @@ function CreateRoom({ user, onRoomCreated, onClose, isOpen }: CreateRoomProps) {
     console.log('Sending request data:', requestData);
 
     try {
-      const response = await fetch('http://localhost:5000/rooms', {
+      const response = await fetch(`${SERVER_URL}/rooms`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',

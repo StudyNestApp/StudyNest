@@ -224,18 +224,27 @@
 .table {
   width: 100%;
   min-width: 600px;
+  border-collapse: collapse;
+  table-layout: fixed;
 }
 
 .table-header {
   border-bottom: 2px solid #e5e7eb;
 }
 
-/* Optional: sticky header so the header stays on top while scrolling */
 .table-header th {
   position: sticky;
   top: 0;
   background: #f9fafb;
   z-index: 1;
+  padding: 1rem 1.5rem;
+  text-align: center;
+  vertical-align: middle;
+  font-weight: 600;
+  color: #374151;
+  font-size: 0.875rem;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
 }
 
 .table-row {
@@ -253,12 +262,15 @@
 
 .table-cell {
   padding: 1.5rem;
+  text-align: center;
+  vertical-align: middle;
 }
 
 /* Room Name Cell */
 .room-name-cell {
   display: flex;
   align-items: center;
+  justify-content: center;
 }
 
 .room-avatar {
@@ -285,6 +297,7 @@
 .creator-cell {
   display: flex;
   align-items: center;
+  justify-content: center;
 }
 
 .creator-avatar {
@@ -321,8 +334,12 @@
 
 /* Date Cell */
 .date-cell {
+  display: flex;
+  align-items: center;
+  justify-content: center;
   color: #4b5563;
   font-weight: 500;
+  white-space: nowrap;
 }
 
 .date-text {

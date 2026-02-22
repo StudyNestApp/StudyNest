@@ -1,5 +1,7 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { io, Socket } from 'socket.io-client';
+import { SERVER_URL } from '../lib/serverConfig';
+import { initDebugPanel } from '../lib/debugPanel';
 import type { User } from '@supabase/supabase-js';
 import './../styles/VideoRoom.css';
 
@@ -22,6 +24,7 @@ interface ChatMessage {
 
 interface VideoRoomProps {
   roomId: string; // This will be the video_url from the room
+  roomName: string; // The actual room name for deletion
   user: User;
   onLeave: () => void;
 }
@@ -34,7 +37,7 @@ const rtcConfig = {
   ],
 };
 
-const VideoRoom: React.FC<VideoRoomProps> = ({ roomId, user, onLeave }) => {
+const VideoRoom: React.FC<VideoRoomProps> = ({ roomId, roomName: roomNameProp, user, onLeave }) => {
   const [socket, setSocket] = useState<Socket | null>(null);
   const [participants, setParticipants] = useState<Map<string, Participant>>(new Map());
   const [localStream, setLocalStream] = useState<MediaStream | null>(null);
@@ -50,6 +53,8 @@ const VideoRoom: React.FC<VideoRoomProps> = ({ roomId, user, onLeave }) => {
   const localVideoRef = useRef<HTMLVideoElement>(null);
   const peerConnections = useRef<Map<string, RTCPeerConnection>>(new Map());
   const chatContainerRef = useRef<HTMLDivElement>(null);
+  const socketRef = useRef<Socket | null>(null);
+  const pendingCandidates = useRef<Map<string, RTCIceCandidateInit[]>>(new Map());
 
   useEffect(() => {
     initializeVideoRoom();
@@ -77,12 +82,27 @@ const VideoRoom: React.FC<VideoRoomProps> = ({ roomId, user, onLeave }) => {
       }
 
       // Initialize Socket.io connection
-      const socketConnection = io('http://localhost:5000');
+      const socketConnection = io(SERVER_URL);
       setSocket(socketConnection);
+      socketRef.current = socketConnection;
 
       // Use roomId as the room identifier for Socket.io
       const userName = user.email?.split('@')[0] || 'Anonymous';
       setRoomName(roomId.substring(0, 8)); // Show shortened room ID
+      
+      // Add current user to participants
+      setParticipants(prev => {
+        const newParticipants = new Map(prev);
+        newParticipants.set(user.id, {
+          id: user.id,
+          name: userName,
+          socketId: socketConnection.id || '',
+          isVideoEnabled: true,
+          isAudioEnabled: true,
+          stream: stream
+        });
+        return newParticipants;
+      });
       
       // Join the room using the video_url as room identifier
       socketConnection.emit('join-room', roomId, user.id, userName);
@@ -121,6 +141,9 @@ const VideoRoom: React.FC<VideoRoomProps> = ({ roomId, user, onLeave }) => {
         peerConnection.close();
         peerConnections.current.delete(data.userId);
       }
+      
+      // Clean up pending candidates
+      pendingCandidates.current.delete(data.userId);
       
       setParticipants(prev => {
         const newParticipants = new Map(prev);
@@ -165,33 +188,54 @@ const VideoRoom: React.FC<VideoRoomProps> = ({ roomId, user, onLeave }) => {
   };
 
   const createPeerConnection = async (participant: Participant, stream: MediaStream, isInitiator: boolean) => {
+    // Skip if peer connection already exists (prevent duplicates)
+    if (peerConnections.current.has(participant.id)) {
+      console.log(`Peer connection already exists for ${participant.name}`);
+      return;
+    }
+
     const peerConnection = new RTCPeerConnection(rtcConfig);
     peerConnections.current.set(participant.id, peerConnection);
 
     // Add local stream tracks to peer connection
+    console.log(`📤 Adding local tracks to peer connection with ${participant.name}`);
     stream.getTracks().forEach(track => {
+      console.log(`   Adding ${track.kind} track: ${track.label}`);
       peerConnection.addTrack(track, stream);
     });
 
     // Handle incoming stream
     peerConnection.ontrack = (event) => {
+      console.log(`🎥 Remote track received from ${participant.name}:`, event.track.kind);
       const [remoteStream] = event.streams;
-      setParticipants(prev => {
-        const newParticipants = new Map(prev);
-        const existingParticipant = newParticipants.get(participant.id);
-        if (existingParticipant) {
-          existingParticipant.stream = remoteStream;
-        } else {
-          newParticipants.set(participant.id, { ...participant, stream: remoteStream });
-        }
-        return newParticipants;
-      });
+      
+      if (remoteStream) {
+        console.log(`📹 Remote stream has ${remoteStream.getTracks().length} tracks`);
+        console.log(`   Video tracks: ${remoteStream.getVideoTracks().length}`);
+        console.log(`   Audio tracks: ${remoteStream.getAudioTracks().length}`);
+        
+        setParticipants(prev => {
+          const newParticipants = new Map(prev);
+          const existingParticipant = newParticipants.get(participant.id);
+          if (existingParticipant) {
+            console.log(`✅ Updated existing participant ${participant.name} with stream`);
+            // Create NEW object so React detects the change
+            newParticipants.set(participant.id, { ...existingParticipant, stream: remoteStream });
+          } else {
+            console.log(`➕ Added new participant ${participant.name} with stream`);
+            newParticipants.set(participant.id, { ...participant, stream: remoteStream });
+          }
+          return newParticipants;
+        });
+      } else {
+        console.error(`❌ No remote stream in ontrack event for ${participant.name}`);
+      }
     };
 
     // Handle ICE candidates
     peerConnection.onicecandidate = (event) => {
-      if (event.candidate && socket) {
-        socket.emit('ice-candidate', {
+      if (event.candidate && socketRef.current) {
+        socketRef.current.emit('ice-candidate', {
           candidate: event.candidate,
           targetSocketId: participant.socketId
         });
@@ -200,20 +244,31 @@ const VideoRoom: React.FC<VideoRoomProps> = ({ roomId, user, onLeave }) => {
 
     // Handle connection state changes
     peerConnection.onconnectionstatechange = () => {
-      console.log(`Connection state with ${participant.name}: ${peerConnection.connectionState}`);
+      console.log(`🔌 Connection state with ${participant.name}: ${peerConnection.connectionState}`);
       if (peerConnection.connectionState === 'failed') {
+        console.error(`❌ Connection failed with ${participant.name}`);
         // Try to restart ICE
         peerConnection.restartIce();
+      } else if (peerConnection.connectionState === 'connected') {
+        console.log(`✅ Successfully connected to ${participant.name}`);
       }
+    };
+
+    // Handle ICE connection state changes
+    peerConnection.oniceconnectionstatechange = () => {
+      console.log(`🧊 ICE connection state with ${participant.name}: ${peerConnection.iceConnectionState}`);
     };
 
     // If initiator, create offer
     if (isInitiator) {
       try {
+        console.log(`📞 Creating offer for ${participant.name} (I am initiator)`);
         const offer = await peerConnection.createOffer();
         await peerConnection.setLocalDescription(offer);
+        console.log(`   ✅ Offer created and set as local description`);
         
-        socket?.emit('offer', {
+        console.log(`   📧 Sending offer to ${participant.name}`);
+        socketRef.current?.emit('offer', {
           offer,
           targetUserId: participant.id,
           targetSocketId: participant.socketId
@@ -221,6 +276,8 @@ const VideoRoom: React.FC<VideoRoomProps> = ({ roomId, user, onLeave }) => {
       } catch (error) {
         console.error('Error creating offer:', error);
       }
+    } else {
+      console.log(`⏳ Waiting for offer from ${participant.name} (they are initiator)`);
     }
 
     // Add participant to state
@@ -232,14 +289,33 @@ const VideoRoom: React.FC<VideoRoomProps> = ({ roomId, user, onLeave }) => {
   };
 
   const handleOffer = async (data: any) => {
+    console.log(`📨 Received offer from ${data.fromUserId}`);
     const peerConnection = peerConnections.current.get(data.fromUserId);
     if (peerConnection) {
       try {
+        console.log(`   Setting remote description...`);
         await peerConnection.setRemoteDescription(data.offer);
+        console.log(`   Creating answer...`);
         const answer = await peerConnection.createAnswer();
         await peerConnection.setLocalDescription(answer);
+        console.log(`   ✅ Answer created and set as local description`);
         
-        socket?.emit('answer', {
+        // Add any pending ICE candidates now that remote description is set
+        const pending = pendingCandidates.current.get(data.fromUserId);
+        if (pending) {
+          console.log(`   Adding ${pending.length} pending ICE candidates`);
+          for (const candidate of pending) {
+            try {
+              await peerConnection.addIceCandidate(candidate);
+            } catch (err) {
+              console.error('Error adding queued ICE candidate:', err);
+            }
+          }
+          pendingCandidates.current.delete(data.fromUserId);
+        }
+        
+        console.log(`   📤 Sending answer to ${data.fromUserId}`);
+        socketRef.current?.emit('answer', {
           answer,
           targetUserId: data.fromUserId,
           targetSocketId: data.fromSocketId
@@ -251,10 +327,27 @@ const VideoRoom: React.FC<VideoRoomProps> = ({ roomId, user, onLeave }) => {
   };
 
   const handleAnswer = async (data: any) => {
+    console.log(`📬 Received answer from ${data.fromUserId}`);
     const peerConnection = peerConnections.current.get(data.fromUserId);
     if (peerConnection) {
       try {
+        console.log(`   Setting remote description from answer...`);
         await peerConnection.setRemoteDescription(data.answer);
+        console.log(`   ✅ Remote description set from answer`);
+        
+        // Add any pending ICE candidates now that remote description is set
+        const pending = pendingCandidates.current.get(data.fromUserId);
+        if (pending) {
+          console.log(`   Adding ${pending.length} pending ICE candidates`);
+          for (const candidate of pending) {
+            try {
+              await peerConnection.addIceCandidate(candidate);
+            } catch (err) {
+              console.error('Error adding queued ICE candidate:', err);
+            }
+          }
+          pendingCandidates.current.delete(data.fromUserId);
+        }
       } catch (error) {
         console.error('Error handling answer:', error);
       }
@@ -265,7 +358,17 @@ const VideoRoom: React.FC<VideoRoomProps> = ({ roomId, user, onLeave }) => {
     const peerConnection = peerConnections.current.get(data.fromUserId);
     if (peerConnection) {
       try {
-        await peerConnection.addIceCandidate(data.candidate);
+        // Check if remote description is set
+        if (peerConnection.remoteDescription) {
+          await peerConnection.addIceCandidate(data.candidate);
+        } else {
+          // Queue the candidate for later
+          if (!pendingCandidates.current.has(data.fromUserId)) {
+            pendingCandidates.current.set(data.fromUserId, []);
+          }
+          pendingCandidates.current.get(data.fromUserId)!.push(data.candidate);
+          console.log(`Queued ICE candidate for ${data.fromUserId} (remote description not yet set)`);
+        }
       } catch (error) {
         console.error('Error adding ICE candidate:', error);
       }
@@ -278,7 +381,7 @@ const VideoRoom: React.FC<VideoRoomProps> = ({ roomId, user, onLeave }) => {
       if (videoTrack) {
         videoTrack.enabled = !videoTrack.enabled;
         setIsVideoEnabled(videoTrack.enabled);
-        socket?.emit('toggle-media', { video: videoTrack.enabled });
+        socketRef.current?.emit('toggle-media', { video: videoTrack.enabled });
       }
     }
   };
@@ -289,7 +392,7 @@ const VideoRoom: React.FC<VideoRoomProps> = ({ roomId, user, onLeave }) => {
       if (audioTrack) {
         audioTrack.enabled = !audioTrack.enabled;
         setIsAudioEnabled(audioTrack.enabled);
-        socket?.emit('toggle-media', { audio: audioTrack.enabled });
+        socketRef.current?.emit('toggle-media', { audio: audioTrack.enabled });
       }
     }
   };
@@ -319,7 +422,7 @@ const VideoRoom: React.FC<VideoRoomProps> = ({ roomId, user, onLeave }) => {
         }
 
         setIsScreenSharing(true);
-        socket?.emit('start-screen-share');
+        socketRef.current?.emit('start-screen-share');
 
         // Handle screen share end
         videoTrack.addEventListener('ended', stopScreenShare);
@@ -352,17 +455,42 @@ const VideoRoom: React.FC<VideoRoomProps> = ({ roomId, user, onLeave }) => {
     }
 
     setIsScreenSharing(false);
-    socket?.emit('stop-screen-share');
+    socketRef.current?.emit('stop-screen-share');
   };
 
   const sendChatMessage = () => {
-    if (newMessage.trim() && socket) {
-      socket.emit('chat-message', newMessage);
+    if (newMessage.trim() && socketRef.current) {
+      socketRef.current.emit('chat-message', newMessage);
       setNewMessage('');
     }
   };
 
-  const handleLeaveRoom = () => {
+  const handleLeaveRoom = async () => {
+    // If this is the last person in the room, confirm before leaving
+    if (participants.size === 1) {
+      const confirmLeave = window.confirm(
+        'You are the last person in the room. Do you want to close the room?'
+      );
+      if (!confirmLeave) return;
+      
+      // Delete the room from the database
+      try {
+        const response = await fetch(`${SERVER_URL}/rooms/${roomNameProp}`, {
+          method: 'DELETE',
+          headers: {
+            'Content-Type': 'application/json',
+          },
+        });
+        
+        const data = await response.json();
+        if (!data.success) {
+          console.error('Failed to delete room:', data.error);
+        }
+      } catch (error) {
+        console.error('Error deleting room:', error);
+      }
+    }
+    
     cleanup();
     onLeave();
   };
@@ -374,14 +502,20 @@ const VideoRoom: React.FC<VideoRoomProps> = ({ roomId, user, onLeave }) => {
     });
     peerConnections.current.clear();
 
+    // Clear pending ICE candidates
+    pendingCandidates.current.clear();
+
     // Stop local stream
     if (localStream) {
       localStream.getTracks().forEach(track => track.stop());
     }
 
+    // Clear participants
+    setParticipants(new Map());
+
     // Disconnect socket
-    if (socket) {
-      socket.disconnect();
+    if (socketRef.current) {
+      socketRef.current.disconnect();
     }
   };
 
@@ -399,7 +533,7 @@ const VideoRoom: React.FC<VideoRoomProps> = ({ roomId, user, onLeave }) => {
       <div className="video-room-header">
         <h2>Study Room: {roomName}</h2>
         <div className="participant-count">
-          {participants.size + 1} participant{participants.size !== 0 ? 's' : ''}
+          {participants.size} participant{participants.size !== 1 ? 's' : ''}
         </div>
         <button onClick={handleLeaveRoom} className="leave-room-btn">
           Leave Room
@@ -428,9 +562,11 @@ const VideoRoom: React.FC<VideoRoomProps> = ({ roomId, user, onLeave }) => {
           </div>
 
           {/* Remote videos */}
-          {Array.from(participants.values()).map(participant => (
-            <ParticipantVideo key={participant.id} participant={participant} />
-          ))}
+          {Array.from(participants.values())
+            .filter(participant => participant.id !== user.id) // Exclude self from remote videos
+            .map(participant => (
+              <ParticipantVideo key={participant.id} participant={participant} />
+            ))}
         </div>
 
         {/* Controls */}
@@ -521,9 +657,14 @@ const ParticipantVideo: React.FC<{ participant: Participant }> = ({ participant 
 
   useEffect(() => {
     if (videoRef.current && participant.stream) {
+      console.log(`🖼️ Setting stream for ${participant.name} video element`);
+      console.log(`   Stream has ${participant.stream.getTracks().length} tracks`);
+      console.log(`   Video tracks active: ${participant.stream.getVideoTracks().some(t => t.enabled)}`);
       videoRef.current.srcObject = participant.stream;
+    } else if (videoRef.current && !participant.stream) {
+      console.log(`⚠️ No stream available for ${participant.name}`);
     }
-  }, [participant.stream]);
+  }, [participant.stream, participant.name]);
 
   return (
     <div className="video-container remote-video">

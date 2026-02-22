@@ -13,7 +13,7 @@ function generateVideoRoomId() {
 // GET /rooms - Get all rooms
 router.get('/', async (req, res) => {
   try {
-    const result = await query('SELECT * FROM "Rooms" ORDER BY created_at DESC');
+    const result = await query('SELECT * FROM "rooms" ORDER BY created_at DESC');
     console.log('📋 Fetched rooms:', result.rows); // Debug log to see all rooms
     res.json({
       success: true,
@@ -34,7 +34,7 @@ router.get('/', async (req, res) => {
 router.get('/:name', async (req, res) => {
   try {
     const { name } = req.params;
-    const result = await query('SELECT * FROM "Rooms" WHERE name = $1', [name]);
+    const result = await query('SELECT * FROM "rooms" WHERE name = $1', [name]);
     
     if (result.rows.length === 0) {
       return res.status(404).json({
@@ -73,7 +73,7 @@ router.post('/', async (req, res) => {
     }
     
     // Check if room already exists
-    const existingRoom = await query('SELECT * FROM "Rooms" WHERE name = $1', [name]);
+    const existingRoom = await query('SELECT * FROM "rooms" WHERE name = $1', [name]);
     if (existingRoom.rows.length > 0) {
       return res.status(409).json({
         success: false,
@@ -90,7 +90,7 @@ router.post('/', async (req, res) => {
     const schemaCheck = await query(`
       SELECT column_name, data_type, is_nullable 
       FROM information_schema.columns 
-      WHERE table_name = 'Rooms' AND table_schema = 'public'
+      WHERE table_name = 'rooms' AND table_schema = 'public'
     `);
     console.log('📊 Table schema:', schemaCheck.rows);
     
@@ -101,7 +101,7 @@ router.post('/', async (req, res) => {
     if (!hasVideoUrlColumn) {
       console.log('❌ video_url column does not exist! Creating it...');
       try {
-        await query('ALTER TABLE "Rooms" ADD COLUMN video_url VARCHAR(255)');
+        await query('ALTER TABLE "rooms" ADD COLUMN video_url VARCHAR(255)');
         console.log('✅ Successfully added video_url column');
       } catch (alterError) {
         console.error('❌ Failed to add video_url column:', alterError);
@@ -118,7 +118,7 @@ router.post('/', async (req, res) => {
     console.log('💾 About to insert with values:', insertValues);
     
     // Create room with video_url
-    const insertQuery = 'INSERT INTO "Rooms" (creator, name, created_at, attendance, video_url) VALUES ($1, $2, CURRENT_TIMESTAMP, $3, $4) RETURNING *';
+    const insertQuery = 'INSERT INTO "rooms" (creator, name, created_at, attendance, video_url) VALUES ($1, $2, CURRENT_TIMESTAMP, $3, $4) RETURNING *';
     console.log('📝 Insert query:', insertQuery);
     
     const result = await query(insertQuery, insertValues);
@@ -127,7 +127,7 @@ router.post('/', async (req, res) => {
     console.log('🔗 Video URL in result:', result.rows[0].video_url);
     
     // Double-check by selecting the room again
-    const verifyResult = await query('SELECT * FROM "Rooms" WHERE name = $1', [name]);
+    const verifyResult = await query('SELECT * FROM "rooms" WHERE name = $1', [name]);
     console.log('🔍 Verification select:', verifyResult.rows[0]);
     
     // Triple check - verify the video_url is actually stored
@@ -135,7 +135,7 @@ router.post('/', async (req, res) => {
       console.error('❌ CRITICAL: video_url is NULL in database after insert!');
       console.log('🔧 Attempting manual update...');
       
-      const updateResult = await query('UPDATE "Rooms" SET video_url = $1 WHERE name = $2 RETURNING *', [videoRoomId, name]);
+      const updateResult = await query('UPDATE "rooms" SET video_url = $1 WHERE name = $2 RETURNING *', [videoRoomId, name]);
       console.log('🔄 Manual update result:', updateResult.rows[0]);
       
       if (updateResult.rows[0].video_url) {
@@ -181,7 +181,7 @@ router.put('/:name', async (req, res) => {
     const { attendance, creator } = req.body;
     
     // Check if room exists
-    const existingRoom = await query('SELECT * FROM "Rooms" WHERE name = $1', [name]);
+    const existingRoom = await query('SELECT * FROM "rooms" WHERE name = $1', [name]);
     if (existingRoom.rows.length === 0) {
       return res.status(404).json({
         success: false,
@@ -216,7 +216,7 @@ router.put('/:name', async (req, res) => {
     values.push(name); // Add name for WHERE clause
     
     const result = await query(
-      `UPDATE "Rooms" SET ${updates.join(', ')} WHERE name = $${paramCount} RETURNING *`,
+      `UPDATE "rooms" SET ${updates.join(', ')} WHERE name = $${paramCount} RETURNING *`,
       values
     );
     
@@ -241,7 +241,7 @@ router.delete('/:name', async (req, res) => {
     const { name } = req.params;
     
     // Check if room exists
-    const existingRoom = await query('SELECT * FROM "Rooms" WHERE name = $1', [name]);
+    const existingRoom = await query('SELECT * FROM "rooms" WHERE name = $1', [name]);
     if (existingRoom.rows.length === 0) {
       return res.status(404).json({
         success: false,
@@ -249,7 +249,7 @@ router.delete('/:name', async (req, res) => {
       });
     }
     
-    await query('DELETE FROM "Rooms" WHERE name = $1', [name]);
+    await query('DELETE FROM "rooms" WHERE name = $1', [name]);
     
     res.json({
       success: true,
@@ -279,7 +279,7 @@ router.patch('/:name/attendance', async (req, res) => {
     }
     
     const result = await query(
-      'UPDATE "Rooms" SET attendance = $1 WHERE name = $2 RETURNING *',
+      'UPDATE "rooms" SET attendance = $1 WHERE name = $2 RETURNING *',
       [attendance, name]
     );
     
@@ -311,7 +311,7 @@ router.post('/:name/join', async (req, res) => {
     const { name } = req.params;
     
     const result = await query(
-      'UPDATE "Rooms" SET attendance = attendance + 1 WHERE name = $1 RETURNING *',
+      'UPDATE "rooms" SET attendance = attendance + 1 WHERE name = $1 RETURNING *',
       [name]
     );
     
@@ -343,7 +343,7 @@ router.post('/:name/leave', async (req, res) => {
     const { name } = req.params;
     
     const result = await query(
-      'UPDATE "Rooms" SET attendance = GREATEST(attendance - 1, 0) WHERE name = $1 RETURNING *',
+      'UPDATE "rooms" SET attendance = GREATEST(attendance - 1, 0) WHERE name = $1 RETURNING *',
       [name]
     );
     

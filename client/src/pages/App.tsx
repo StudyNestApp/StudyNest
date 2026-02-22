@@ -29,11 +29,6 @@ function App() {
     return () => subscription.unsubscribe();
   }, []);
 
-  const handleAuthSuccess = () => {
-    // The user state will be updated automatically by the auth listener
-    // This function can be used for any additional logic after successful auth
-  };
-
   if (loading) {
     return (
       <div className="min-h-screen flex items-center justify-center">
@@ -50,7 +45,7 @@ function App() {
       {user ? (
         <Welcome />
       ) : (
-        <AuthForm onAuthSuccess={handleAuthSuccess} />
+        <AuthForm />
       )}
     </div>
   );

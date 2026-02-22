@@ -1,18 +1,36 @@
 const express = require('express');
 const cors = require('cors');
-const http = require('http');
+const https = require('https');
+const fs = require('fs');
+const path = require('path');
 const socketIo = require('socket.io');
 require('dotenv').config();
 
 const roomsRouter = require('./routes/rooms');
 
 const app = express();
-const server = http.createServer(app);
+
+// Load SSL certificates
+const keyPath = path.join(__dirname, '../certs/key.pem');
+const certPath = path.join(__dirname, '../certs/cert.pem');
+
+let server;
+try {
+  const key = fs.readFileSync(keyPath);
+  const cert = fs.readFileSync(certPath);
+  server = https.createServer({ key, cert }, app);
+  console.log('✅ HTTPS server created with SSL certificates');
+} catch (err) {
+  console.warn('⚠️  Could not load SSL certificates:', err.message);
+  console.warn('⚠️  Falling back to HTTP');
+  const http = require('http');
+  server = http.createServer(app);
+}
 
 // Socket.io setup with CORS
 const io = socketIo(server, {
   cors: {
-    origin: "http://localhost:3000", // Your React app URL
+    origin: "*", // Allow all origins (safe for development)
     methods: ["GET", "POST"]
   }
 });
@@ -39,17 +57,22 @@ io.on('connection', (socket) => {
 
   // Join room event
   socket.on('join-room', (roomName, userId, userName) => {
-    console.log(`User ${userName} (${userId}) joining room: ${roomName}`);
+    console.log(`\n📝 JOIN-ROOM EVENT:`);
+    console.log(`   User: ${userName} (${userId})`);
+    console.log(`   Socket: ${socket.id}`);
+    console.log(`   Room: ${roomName}`);
     
     // Leave any previous rooms
     Array.from(socket.rooms).forEach(room => {
       if (room !== socket.id) {
         socket.leave(room);
+        console.log(`   Left room: ${room}`);
       }
     });
 
     // Join the new room
     socket.join(roomName);
+    console.log(`   ✅ Joined room`);
     
     // Store user info
     socketToUser.set(socket.id, { userId, userName, roomName });
@@ -57,12 +80,19 @@ io.on('connection', (socket) => {
     // Initialize room if it doesn't exist
     if (!videoRooms.has(roomName)) {
       videoRooms.set(roomName, new Map());
+      console.log(`   🆕 Created new room`);
     }
 
     const room = videoRooms.get(roomName);
+    const currentSize = room.size;
+    console.log(`   Current participants: ${currentSize}`);
     
     // Get existing participants
     const existingParticipants = Array.from(room.values());
+    console.log(`   📤 Sending ${existingParticipants.length} existing participants`);
+    if (existingParticipants.length > 0) {
+      console.log(`      Participants: ${existingParticipants.map(p => p.name).join(', ')}`);
+    }
     
     // Add current user to room
     room.set(userId, {
@@ -72,11 +102,14 @@ io.on('connection', (socket) => {
       isVideoEnabled: true,
       isAudioEnabled: true
     });
+    console.log(`   ✅ Added to room. New size: ${room.size}`);
 
     // Send existing participants to the new user
     socket.emit('existing-participants', existingParticipants);
 
     // Notify others about the new user
+    const othersCount = io.sockets.adapter.rooms.get(roomName).size - 1;
+    console.log(`   📢 Broadcasting user-joined to ${othersCount} others`);
     socket.to(roomName).emit('user-joined', {
       id: userId,
       name: userName,
@@ -84,29 +117,34 @@ io.on('connection', (socket) => {
       isVideoEnabled: true,
       isAudioEnabled: true
     });
-
-    // Update room attendance in database
-    updateRoomAttendance(roomName, room.size);
   });
 
   // WebRTC signaling events
   socket.on('offer', (data) => {
+    console.log(`\n📤 OFFER RECEIVED from ${socketToUser.get(socket.id)?.userName}`);
+    console.log(`   Targeting socket: ${data.targetSocketId}`);
+    console.log(`   From user: ${socketToUser.get(socket.id)?.userId}`);
     socket.to(data.targetSocketId).emit('offer', {
       ...data,
       fromUserId: socketToUser.get(socket.id)?.userId,
       fromSocketId: socket.id
     });
+    console.log(`   ✅ Relayed to ${data.targetSocketId}\n`);
   });
 
   socket.on('answer', (data) => {
+    console.log(`\n📥 ANSWER RECEIVED from ${socketToUser.get(socket.id)?.userName}`);
+    console.log(`   Targeting socket: ${data.targetSocketId}`);
     socket.to(data.targetSocketId).emit('answer', {
       ...data,
       fromUserId: socketToUser.get(socket.id)?.userId,
       fromSocketId: socket.id
     });
+    console.log(`   ✅ Relayed\n`);
   });
 
   socket.on('ice-candidate', (data) => {
+    // Don't log all ICE candidates (too many), just relay
     socket.to(data.targetSocketId).emit('ice-candidate', {
       ...data,
       fromUserId: socketToUser.get(socket.id)?.userId,
@@ -209,14 +247,16 @@ io.on('connection', (socket) => {
 async function updateRoomAttendance(roomName, attendance) {
   try {
     const { query } = require('./db'); // Adjust path as needed
-    await query('UPDATE "Rooms" SET attendance = $1 WHERE name = $2', [attendance, roomName]);
+    await query('UPDATE "rooms" SET attendance = $1 WHERE name = $2', [attendance, roomName]);
   } catch (error) {
     console.error('Error updating room attendance:', error);
   }
 }
 
 const PORT = process.env.PORT || 5000;
-server.listen(PORT, () => {
-  console.log(`✅ Server running on http://localhost:${PORT}`);
+server.listen(PORT, '0.0.0.0', () => {
+  const protocol = server instanceof https.Server ? 'https' : 'http';
+  console.log(`✅ Server running on ${protocol}://0.0.0.0:${PORT}`);
+  console.log(`✅ Accessible from: ${protocol}://192.168.1.120:${PORT}`);
   console.log(`🔗 Socket.io enabled for WebRTC signaling`);
 });
