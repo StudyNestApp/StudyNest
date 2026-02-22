@@ -1,4 +1,5 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useCallback } from 'react';
+import { io } from 'socket.io-client';
 import { supabase } from '../lib/supabaseClient';
 import { SERVER_URL } from '../lib/serverConfig';
 import type { User } from '@supabase/supabase-js';
@@ -8,6 +9,8 @@ import VideoRoom from './VideoRoom';
 import './../styles/Welcome.css';
 import dayjs from 'dayjs';
 import relativeTime from 'dayjs/plugin/relativeTime';
+
+const ACTIVE_ROOM_STORAGE_KEY = 'studynest.activeRoom';
 
 interface Room {
   creator: string;
@@ -21,6 +24,7 @@ interface ApiResponse {
   success: boolean;
   data: Room | Room[];
   count?: number;
+  deleted?: boolean;
   error?: string;
   message?: string;
 }
@@ -39,6 +43,31 @@ function Welcome() {
 
   // Extend dayjs with relative time plugin
   dayjs.extend(relativeTime);
+
+  const fetchRooms = useCallback(async (showFetchError = false) => {
+    try {
+      const response = await fetch(`${SERVER_URL}/rooms`);
+      const data: ApiResponse = await response.json();
+
+      if (data.success && Array.isArray(data.data)) {
+        setRooms(data.data);
+        if (showFetchError) {
+          setError('');
+        }
+      } else if (showFetchError) {
+        setError(data.error || 'Failed to fetch rooms');
+      }
+    } catch (err) {
+      if (showFetchError) {
+        setError('Failed to connect to server');
+      }
+      console.error('Error fetching rooms:', err);
+    } finally {
+      if (showFetchError) {
+        setLoading(false);
+      }
+    }
+  }, []);
 
   useEffect(() => {
     // Get current user
@@ -60,27 +89,33 @@ function Welcome() {
   }, []);
 
   useEffect(() => {
-    // Fetch rooms from backend
-    const fetchRooms = async () => {
-      try {
-        const response = await fetch(`${SERVER_URL}/rooms`);
-        const data: ApiResponse = await response.json();
-        
-        if (data.success && Array.isArray(data.data)) {
-          setRooms(data.data);
-        } else {
-          setError(data.error || 'Failed to fetch rooms');
-        }
-      } catch (err) {
-        setError('Failed to connect to server');
-        console.error('Error fetching rooms:', err);
-      } finally {
-        setLoading(false);
+    void fetchRooms(true);
+  }, [fetchRooms]);
+
+  useEffect(() => {
+    const roomsSocket = io(SERVER_URL);
+
+    const onRoomsChanged = () => {
+      if (!showVideoRoom) {
+        void fetchRooms(false);
       }
     };
 
-    fetchRooms();
-  }, []);
+    const onVisibilityChange = () => {
+      if (!showVideoRoom && document.visibilityState === 'visible') {
+        void fetchRooms(false);
+      }
+    };
+
+    roomsSocket.on('rooms-changed', onRoomsChanged);
+    document.addEventListener('visibilitychange', onVisibilityChange);
+
+    return () => {
+      roomsSocket.off('rooms-changed', onRoomsChanged);
+      roomsSocket.disconnect();
+      document.removeEventListener('visibilitychange', onVisibilityChange);
+    };
+  }, [fetchRooms, showVideoRoom]);
 
   const handleSignOut = async () => {
     await supabase.auth.signOut();
@@ -92,6 +127,12 @@ function Welcome() {
     // Add the new room to the beginning of the list
     setRooms(prevRooms => [newRoom, ...prevRooms]);
     console.log('Room created successfully:', newRoom);
+
+    if (newRoom.video_url) {
+      setCurrentVideoRoom(newRoom);
+      setShowVideoRoom(true);
+      localStorage.setItem(ACTIVE_ROOM_STORAGE_KEY, JSON.stringify(newRoom));
+    }
   };
 
   // Open create room modal
@@ -133,6 +174,7 @@ function Welcome() {
         // Set current video room and show video interface
         setCurrentVideoRoom(data.data as Room);
         setShowVideoRoom(true);
+        localStorage.setItem(ACTIVE_ROOM_STORAGE_KEY, JSON.stringify(data.data));
       } else {
         setError(data.error || 'Failed to join room');
       }
@@ -147,18 +189,20 @@ function Welcome() {
     if (!currentVideoRoom) return;
 
     try {
-      // Try to leave the room (decrement attendance)
-      // If room was deleted, this will fail gracefully
-      const response = await fetch(`${SERVER_URL}/rooms/${currentVideoRoom.name}/leave`, {
+      const creator = user?.email?.split('@')[0] || '';
+      const response = await fetch(`${SERVER_URL}/rooms/${currentVideoRoom.name}/exit`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
         },
+        body: JSON.stringify({ creator }),
       });
 
       const data: ApiResponse = await response.json();
 
-      if (data.success && data.data && !Array.isArray(data.data)) {
+      if (data.success && data.deleted) {
+        setRooms(prevRooms => prevRooms.filter(r => r.name !== currentVideoRoom.name));
+      } else if (data.success && data.data && !Array.isArray(data.data)) {
         // Update local rooms state
         setRooms(prevRooms => 
           prevRooms.map(r => 
@@ -175,11 +219,7 @@ function Welcome() {
       console.error('Error leaving room:', err);
       // If there's an error, try to refetch rooms to sync state
       try {
-        const response = await fetch(`${SERVER_URL}/rooms`);
-        const data: ApiResponse = await response.json();
-        if (data.success && Array.isArray(data.data)) {
-          setRooms(data.data);
-        }
+        await fetchRooms(false);
       } catch (refetchErr) {
         console.error('Error refetching rooms:', refetchErr);
       }
@@ -187,8 +227,87 @@ function Welcome() {
       // Always close video room UI
       setCurrentVideoRoom(null);
       setShowVideoRoom(false);
+      localStorage.removeItem(ACTIVE_ROOM_STORAGE_KEY);
     }
   };
+
+  useEffect(() => {
+    if (loading || !user || showVideoRoom) {
+      return;
+    }
+
+    const restoreActiveRoom = async () => {
+      const storedRoomRaw = localStorage.getItem(ACTIVE_ROOM_STORAGE_KEY);
+      if (!storedRoomRaw) {
+        return;
+      }
+
+      try {
+        const storedRoom: Room = JSON.parse(storedRoomRaw);
+        if (!storedRoom?.name) {
+          localStorage.removeItem(ACTIVE_ROOM_STORAGE_KEY);
+          return;
+        }
+
+        const response = await fetch(`${SERVER_URL}/rooms/${storedRoom.name}`);
+        const data: ApiResponse = await response.json();
+
+        if (data.success && data.data && !Array.isArray(data.data)) {
+          const room = data.data as Room;
+          setCurrentVideoRoom(room);
+          setShowVideoRoom(true);
+          localStorage.setItem(ACTIVE_ROOM_STORAGE_KEY, JSON.stringify(room));
+        } else {
+          localStorage.removeItem(ACTIVE_ROOM_STORAGE_KEY);
+        }
+      } catch (err) {
+        console.error('Error restoring active room:', err);
+        localStorage.removeItem(ACTIVE_ROOM_STORAGE_KEY);
+      }
+    };
+
+    restoreActiveRoom();
+  }, [loading, showVideoRoom, user]);
+
+  useEffect(() => {
+    if (!showVideoRoom || !currentVideoRoom || !user?.email) {
+      return;
+    }
+
+    const creator = user.email.split('@')[0];
+
+    const handleRuntimeFailure = async () => {
+      try {
+        await fetch(`${SERVER_URL}/rooms/${currentVideoRoom.name}/exit`, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({ creator }),
+        });
+      } catch (err) {
+        console.error('Error handling runtime failure room exit:', err);
+      } finally {
+        localStorage.removeItem(ACTIVE_ROOM_STORAGE_KEY);
+      }
+    };
+
+    const onError = () => {
+      void handleRuntimeFailure();
+    };
+
+    const onUnhandledRejection = () => {
+      void handleRuntimeFailure();
+    };
+
+    window.addEventListener('error', onError);
+    window.addEventListener('unhandledrejection', onUnhandledRejection);
+
+    return () => {
+      window.removeEventListener('error', onError);
+      window.removeEventListener('unhandledrejection', onUnhandledRejection);
+    };
+  }, [currentVideoRoom, showVideoRoom, user]);
 
   const formatDate = (dateString: string) => {
     // Handle null, undefined, or empty strings

@@ -8,6 +8,7 @@ interface Room {
   name: string;
   created_at: string;
   attendance: number;
+  video_url?: string;
 }
 
 interface CreateRoomProps {

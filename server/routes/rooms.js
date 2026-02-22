@@ -3,6 +3,19 @@ const { query } = require('../db');
 const crypto = require('crypto'); // IMPORTANT: Make sure this is imported
 const router = express.Router();
 
+function emitRoomsChanged(req, action, roomName) {
+  const io = req.app.get('io');
+  if (!io) {
+    return;
+  }
+
+  io.emit('rooms-changed', {
+    action,
+    roomName,
+    timestamp: Date.now(),
+  });
+}
+
 // Helper function to generate unique video room ID
 function generateVideoRoomId() {
   const id = crypto.randomBytes(16).toString('hex');
@@ -140,6 +153,7 @@ router.post('/', async (req, res) => {
       
       if (updateResult.rows[0].video_url) {
         console.log('✅ Manual update successful');
+        emitRoomsChanged(req, 'created', name);
         return res.status(201).json({
           success: true,
           message: 'Room created successfully (with manual video_url fix)',
@@ -150,6 +164,7 @@ router.post('/', async (req, res) => {
       }
     }
     
+    emitRoomsChanged(req, 'created', name);
     res.status(201).json({
       success: true,
       message: 'Room created successfully',
@@ -250,6 +265,7 @@ router.delete('/:name', async (req, res) => {
     }
     
     await query('DELETE FROM "rooms" WHERE name = $1', [name]);
+    emitRoomsChanged(req, 'deleted', name);
     
     res.json({
       success: true,
@@ -327,6 +343,7 @@ router.post('/:name/join', async (req, res) => {
       message: 'Joined room successfully',
       data: result.rows[0]
     });
+    emitRoomsChanged(req, 'joined', name);
   } catch (error) {
     console.error('Error joining room:', error);
     res.status(500).json({
@@ -359,11 +376,63 @@ router.post('/:name/leave', async (req, res) => {
       message: 'Left room successfully',
       data: result.rows[0]
     });
+    emitRoomsChanged(req, 'left', name);
   } catch (error) {
     console.error('Error leaving room:', error);
     res.status(500).json({
       success: false,
       error: 'Failed to leave room',
+      message: error.message
+    });
+  }
+});
+
+// POST /rooms/:name/exit - Leave room, and delete if creator is last participant
+router.post('/:name/exit', async (req, res) => {
+  try {
+    const { name } = req.params;
+    const { creator } = req.body || {};
+
+    const roomResult = await query('SELECT * FROM "rooms" WHERE name = $1', [name]);
+    if (roomResult.rows.length === 0) {
+      return res.status(404).json({
+        success: false,
+        error: 'Room not found'
+      });
+    }
+
+    const room = roomResult.rows[0];
+    const isCreator = typeof creator === 'string' && creator === room.creator;
+    const isLastParticipant = Number(room.attendance) <= 1;
+
+    if (isCreator && isLastParticipant) {
+      await query('DELETE FROM "rooms" WHERE name = $1', [name]);
+      emitRoomsChanged(req, 'deleted', name);
+      return res.json({
+        success: true,
+        message: 'Room deleted because creator exited as last participant',
+        deleted: true,
+        data: null
+      });
+    }
+
+    const leaveResult = await query(
+      'UPDATE "rooms" SET attendance = GREATEST(attendance - 1, 0) WHERE name = $1 RETURNING *',
+      [name]
+    );
+
+    emitRoomsChanged(req, 'left', name);
+    return res.json({
+      success: true,
+      message: 'Left room successfully',
+      deleted: false,
+      data: leaveResult.rows[0]
+    });
+  } catch (error) {
+    console.error('Error exiting room:', error);
+    return res.status(500).json({
+      success: false,
+      error: 'Failed to exit room',
       message: error.message
     });
   }

@@ -35,6 +35,8 @@ const io = socketIo(server, {
   }
 });
 
+app.set('io', io);
+
 // Middleware
 app.use(cors());
 app.use(express.json());
