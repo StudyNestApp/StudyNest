@@ -11,6 +11,7 @@ import dayjs from 'dayjs';
 import relativeTime from 'dayjs/plugin/relativeTime';
 
 const ACTIVE_ROOM_STORAGE_KEY = 'studynest.activeRoom';
+dayjs.extend(relativeTime);
 
 interface Room {
   creator: string;
@@ -40,9 +41,6 @@ function Welcome() {
   // Video room states
   const [currentVideoRoom, setCurrentVideoRoom] = useState<Room | null>(null);
   const [showVideoRoom, setShowVideoRoom] = useState(false);
-
-  // Extend dayjs with relative time plugin
-  dayjs.extend(relativeTime);
 
   const fetchRooms = useCallback(async (showFetchError = false) => {
     try {
@@ -344,7 +342,7 @@ function Welcome() {
     return (
       <VideoRoom
         roomId={currentVideoRoom.video_url!} // Use video_url as room ID
-        roomName={currentVideoRoom.name} // Pass room name for deletion
+        roomName={currentVideoRoom.name}
         user={user}
         onLeave={handleLeaveVideoRoom}
       />

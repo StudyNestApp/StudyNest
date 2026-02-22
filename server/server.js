@@ -9,6 +9,33 @@ require('dotenv').config();
 const roomsRouter = require('./routes/rooms');
 
 const app = express();
+const DEBUG_LOGS = process.env.DEBUG_LOGS === 'true';
+
+const debugLog = (...args) => {
+  if (DEBUG_LOGS) {
+    console.log(...args);
+  }
+};
+
+const parsedCorsOrigins = (process.env.CORS_ORIGINS || '')
+  .split(',')
+  .map(origin => origin.trim())
+  .filter(Boolean);
+const allowAllOrigins =
+  process.env.CORS_ALLOW_ALL === 'true' ||
+  (parsedCorsOrigins.length === 0 && process.env.NODE_ENV !== 'production');
+
+const isOriginAllowed = (origin) => {
+  if (!origin) {
+    return true;
+  }
+
+  if (allowAllOrigins) {
+    return true;
+  }
+
+  return parsedCorsOrigins.includes(origin);
+};
 
 // Load SSL certificates
 const keyPath = path.join(__dirname, '../certs/key.pem');
@@ -30,7 +57,13 @@ try {
 // Socket.io setup with CORS
 const io = socketIo(server, {
   cors: {
-    origin: "*", // Allow all origins (safe for development)
+    origin: (origin, callback) => {
+      if (isOriginAllowed(origin)) {
+        return callback(null, true);
+      }
+
+      return callback(new Error('CORS: Origin not allowed'));
+    },
     methods: ["GET", "POST"]
   }
 });
@@ -38,7 +71,17 @@ const io = socketIo(server, {
 app.set('io', io);
 
 // Middleware
-app.use(cors());
+app.use(
+  cors({
+    origin: (origin, callback) => {
+      if (isOriginAllowed(origin)) {
+        return callback(null, true);
+      }
+
+      return callback(new Error('CORS: Origin not allowed'));
+    },
+  })
+);
 app.use(express.json());
 
 // Routes
@@ -55,34 +98,39 @@ const socketToUser = new Map();
 
 // Socket.io connection handling
 io.on('connection', (socket) => {
-  console.log('User connected:', socket.id);
+  debugLog('User connected:', socket.id);
 
   // Join room event
-  socket.on('join-room', (roomName, userId, userName) => {
-    console.log(`\n📝 JOIN-ROOM EVENT:`);
-    console.log(`   User: ${userName} (${userId})`);
-    console.log(`   Socket: ${socket.id}`);
-    console.log(`   Room: ${roomName}`);
+  socket.on('join-room', (roomName, userId, userName, dbRoomName) => {
+    debugLog(`\n📝 JOIN-ROOM EVENT:`);
+    debugLog(`   User: ${userName} (${userId})`);
+    debugLog(`   Socket: ${socket.id}`);
+    debugLog(`   Room: ${roomName}`);
     
     // Leave any previous rooms
     Array.from(socket.rooms).forEach(room => {
       if (room !== socket.id) {
         socket.leave(room);
-        console.log(`   Left room: ${room}`);
+        debugLog(`   Left room: ${room}`);
       }
     });
 
     // Join the new room
     socket.join(roomName);
-    console.log(`   ✅ Joined room`);
+    debugLog(`   ✅ Joined room`);
     
     // Store user info
-    socketToUser.set(socket.id, { userId, userName, roomName });
+    socketToUser.set(socket.id, {
+      userId,
+      userName,
+      roomName,
+      dbRoomName: dbRoomName || roomName,
+    });
 
     // Initialize room if it doesn't exist
     if (!videoRooms.has(roomName)) {
       videoRooms.set(roomName, new Map());
-      console.log(`   🆕 Created new room`);
+      debugLog(`   🆕 Created new room`);
     }
 
     const room = videoRooms.get(roomName);
@@ -98,13 +146,13 @@ io.on('connection', (socket) => {
     }
 
     const currentSize = room.size;
-    console.log(`   Current participants: ${currentSize}`);
+    debugLog(`   Current participants: ${currentSize}`);
     
     // Get existing participants
     const existingParticipants = Array.from(room.values());
-    console.log(`   📤 Sending ${existingParticipants.length} existing participants`);
+    debugLog(`   📤 Sending ${existingParticipants.length} existing participants`);
     if (existingParticipants.length > 0) {
-      console.log(`      Participants: ${existingParticipants.map(p => p.name).join(', ')}`);
+      debugLog(`      Participants: ${existingParticipants.map(p => p.name).join(', ')}`);
     }
     
     // Add current socket connection to room (supports same user on multiple devices)
@@ -115,14 +163,14 @@ io.on('connection', (socket) => {
       isVideoEnabled: true,
       isAudioEnabled: true
     });
-    console.log(`   ✅ Added to room. New size: ${room.size}`);
+    debugLog(`   ✅ Added to room. New size: ${room.size}`);
 
     // Send existing participants to the new user
     socket.emit('existing-participants', existingParticipants);
 
     // Notify others about the new user
     const othersCount = io.sockets.adapter.rooms.get(roomName).size - 1;
-    console.log(`   📢 Broadcasting user-joined to ${othersCount} others`);
+    debugLog(`   📢 Broadcasting user-joined to ${othersCount} others`);
     socket.to(roomName).emit('user-joined', {
       id: userId,
       name: userName,
@@ -134,26 +182,26 @@ io.on('connection', (socket) => {
 
   // WebRTC signaling events
   socket.on('offer', (data) => {
-    console.log(`\n📤 OFFER RECEIVED from ${socketToUser.get(socket.id)?.userName}`);
-    console.log(`   Targeting socket: ${data.targetSocketId}`);
-    console.log(`   From user: ${socketToUser.get(socket.id)?.userId}`);
+    debugLog(`\n📤 OFFER RECEIVED from ${socketToUser.get(socket.id)?.userName}`);
+    debugLog(`   Targeting socket: ${data.targetSocketId}`);
+    debugLog(`   From user: ${socketToUser.get(socket.id)?.userId}`);
     socket.to(data.targetSocketId).emit('offer', {
       ...data,
       fromUserId: socketToUser.get(socket.id)?.userId,
       fromSocketId: socket.id
     });
-    console.log(`   ✅ Relayed to ${data.targetSocketId}\n`);
+    debugLog(`   ✅ Relayed to ${data.targetSocketId}\n`);
   });
 
   socket.on('answer', (data) => {
-    console.log(`\n📥 ANSWER RECEIVED from ${socketToUser.get(socket.id)?.userName}`);
-    console.log(`   Targeting socket: ${data.targetSocketId}`);
+    debugLog(`\n📥 ANSWER RECEIVED from ${socketToUser.get(socket.id)?.userName}`);
+    debugLog(`   Targeting socket: ${data.targetSocketId}`);
     socket.to(data.targetSocketId).emit('answer', {
       ...data,
       fromUserId: socketToUser.get(socket.id)?.userId,
       fromSocketId: socket.id
     });
-    console.log(`   ✅ Relayed\n`);
+    debugLog(`   ✅ Relayed\n`);
   });
 
   socket.on('ice-candidate', (data) => {
@@ -228,7 +276,7 @@ io.on('connection', (socket) => {
 
   // Handle disconnection
   socket.on('disconnect', () => {
-    console.log('User disconnected:', socket.id);
+    debugLog('User disconnected:', socket.id);
     
     const userInfo = socketToUser.get(socket.id);
     if (userInfo) {
@@ -240,7 +288,7 @@ io.on('connection', (socket) => {
         room.delete(socket.id);
         
         // Update database attendance
-        updateRoomAttendance(roomName, room.size);
+        updateRoomAttendance(userInfo.dbRoomName || roomName, room.size);
         
         // If room is empty, clean it up
         if (room.size === 0) {
@@ -261,7 +309,25 @@ io.on('connection', (socket) => {
 async function updateRoomAttendance(roomName, attendance) {
   try {
     const { query } = require('./db'); // Adjust path as needed
+
+    if (attendance <= 0) {
+      const deleteResult = await query('DELETE FROM "rooms" WHERE name = $1 RETURNING name', [roomName]);
+      if (deleteResult.rows.length > 0) {
+        io.emit('rooms-changed', {
+          action: 'deleted',
+          roomName,
+          timestamp: Date.now(),
+        });
+      }
+      return;
+    }
+
     await query('UPDATE "rooms" SET attendance = $1 WHERE name = $2', [attendance, roomName]);
+    io.emit('rooms-changed', {
+      action: 'left',
+      roomName,
+      timestamp: Date.now(),
+    });
   } catch (error) {
     console.error('Error updating room attendance:', error);
   }
@@ -271,6 +337,8 @@ const PORT = process.env.PORT || 5000;
 server.listen(PORT, '0.0.0.0', () => {
   const protocol = server instanceof https.Server ? 'https' : 'http';
   console.log(`✅ Server running on ${protocol}://0.0.0.0:${PORT}`);
-  console.log(`✅ Accessible from: ${protocol}://192.168.1.120:${PORT}`);
+  if (DEBUG_LOGS) {
+    console.log(`✅ Accessible from: ${protocol}://192.168.1.120:${PORT}`);
+  }
   console.log(`🔗 Socket.io enabled for WebRTC signaling`);
 });
