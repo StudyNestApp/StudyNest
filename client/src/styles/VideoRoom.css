@@ -161,12 +161,27 @@
 .media-indicators {
   display: flex;
   gap: 0.5rem;
+  align-items: center;
 }
 
-.video-off,
-.audio-off {
-  font-size: 1.2rem;
-  opacity: 0.8;
+.media-icon {
+  width: 28px;
+  height: 28px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 999px;
+  background: rgba(0, 0, 0, 0.45);
+  color: #ffffff;
+}
+
+.media-icon.video-off,
+.media-icon.audio-off {
+  background: rgba(255, 71, 87, 0.35);
+}
+
+.media-icon.screen-share {
+  background: rgba(79, 172, 254, 0.35);
 }
 
 .video-controls {
@@ -188,7 +203,6 @@
   padding: 1rem;
   border-radius: 50%;
   cursor: pointer;
-  font-size: 1.5rem;
   transition: all 0.2s ease;
   backdrop-filter: blur(10px);
   min-width: 60px;
@@ -196,6 +210,7 @@
   display: flex;
   align-items: center;
   justify-content: center;
+  position: relative;
 }
 
 .control-btn:hover {
@@ -211,6 +226,26 @@
 
 .control-btn.disabled:hover {
   background: rgba(255, 77, 87, 0.4);
+}
+
+.control-btn.active {
+  background: rgba(79, 172, 254, 0.35);
+  border: 2px solid rgba(79, 172, 254, 0.8);
+}
+
+.chat-count {
+  position: absolute;
+  top: -2px;
+  right: -2px;
+  min-width: 18px;
+  height: 18px;
+  padding: 0 4px;
+  border-radius: 999px;
+  background: #ff4757;
+  color: #fff;
+  font-size: 0.7rem;
+  font-weight: 700;
+  line-height: 18px;
 }
 
 /* Chat Panel Styles */
@@ -251,10 +286,52 @@
 .chat-header button {
   background: none;
   border: none;
-  font-size: 1.2rem;
   cursor: pointer;
   color: #666;
   padding: 0.25rem;
+}
+
+.chat-close-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 8px;
+  transition: all 0.2s ease;
+}
+
+.chat-close-btn:hover {
+  background: rgba(0, 0, 0, 0.08);
+  color: #333;
+}
+
+.connection-status {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 0.5rem;
+  color: rgba(255, 255, 255, 0.85);
+  background: rgba(0, 0, 0, 0.35);
+}
+
+.connection-avatar {
+  width: 36px;
+  height: 36px;
+  border-radius: 999px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(255, 255, 255, 0.18);
+  color: #fff;
+}
+
+.loading-spinner.small {
+  width: 22px;
+  height: 22px;
+  border-width: 3px;
+  margin-bottom: 0;
 }
 
 .chat-messages {

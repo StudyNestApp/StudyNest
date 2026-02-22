@@ -1,5 +1,16 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { io, Socket } from 'socket.io-client';
+import {
+  Mic,
+  MicOff,
+  Video,
+  VideoOff,
+  Monitor,
+  MonitorOff,
+  MessageCircle,
+  X,
+  User as UserIcon,
+} from 'lucide-react';
 import { SERVER_URL } from '../lib/serverConfig';
 import type { User } from '@supabase/supabase-js';
 import './../styles/VideoRoom.css';
@@ -667,9 +678,21 @@ const VideoRoom: React.FC<VideoRoomProps> = ({ roomId, roomName: roomNameProp, u
             <div className="video-overlay">
               <span className="participant-name">You</span>
               <div className="media-indicators">
-                {!isVideoEnabled && <span className="video-off">📷❌</span>}
-                {!isAudioEnabled && <span className="audio-off">🎤❌</span>}
-                {isScreenSharing && <span className="screen-share">🖥️</span>}
+                {!isVideoEnabled && (
+                  <span className="media-icon video-off" title="Camera off">
+                    <VideoOff size={16} />
+                  </span>
+                )}
+                {!isAudioEnabled && (
+                  <span className="media-icon audio-off" title="Microphone off">
+                    <MicOff size={16} />
+                  </span>
+                )}
+                {isScreenSharing && (
+                  <span className="media-icon screen-share" title="Screen sharing">
+                    <Monitor size={16} />
+                  </span>
+                )}
               </div>
             </div>
           </div>
@@ -689,7 +712,7 @@ const VideoRoom: React.FC<VideoRoomProps> = ({ roomId, roomName: roomNameProp, u
             className={`control-btn ${!isAudioEnabled ? 'disabled' : ''}`}
             title={isAudioEnabled ? 'Mute microphone' : 'Unmute microphone'}
           >
-            {isAudioEnabled ? '🎤' : '🎤❌'}
+            {isAudioEnabled ? <Mic size={22} /> : <MicOff size={22} />}
           </button>
           
           <button
@@ -697,7 +720,7 @@ const VideoRoom: React.FC<VideoRoomProps> = ({ roomId, roomName: roomNameProp, u
             className={`control-btn ${!isVideoEnabled ? 'disabled' : ''}`}
             title={isVideoEnabled ? 'Turn off camera' : 'Turn on camera'}
           >
-            {isVideoEnabled ? '📷' : '📷❌'}
+            {isVideoEnabled ? <Video size={22} /> : <VideoOff size={22} />}
           </button>
           
           <button 
@@ -705,7 +728,7 @@ const VideoRoom: React.FC<VideoRoomProps> = ({ roomId, roomName: roomNameProp, u
             className={`control-btn ${isScreenSharing ? 'active' : ''}`}
             title={isScreenSharing ? 'Stop screen sharing' : 'Share screen'}
           >
-            {isScreenSharing ? '🖥️❌' : '🖥️'}
+            {isScreenSharing ? <MonitorOff size={22} /> : <Monitor size={22} />}
           </button>
           
           <button
@@ -713,7 +736,8 @@ const VideoRoom: React.FC<VideoRoomProps> = ({ roomId, roomName: roomNameProp, u
             className={`control-btn ${showChat ? 'active' : ''}`}
             title="Toggle chat"
           >
-            💬 {chatMessages.length > 0 && `(${chatMessages.length})`}
+            <MessageCircle size={22} />
+            {chatMessages.length > 0 && <span className="chat-count">{chatMessages.length}</span>}
           </button>
         </div>
       </div>
@@ -723,7 +747,9 @@ const VideoRoom: React.FC<VideoRoomProps> = ({ roomId, roomName: roomNameProp, u
         <div className="chat-panel">
           <div className="chat-header">
             <h3>Chat</h3>
-            <button onClick={() => setShowChat(false)}>❌</button>
+            <button onClick={() => setShowChat(false)} className="chat-close-btn" title="Close chat">
+              <X size={18} />
+            </button>
           </div>
           <div className="chat-messages" ref={chatContainerRef}>
             {chatMessages.length === 0 ? (
@@ -790,12 +816,23 @@ const ParticipantVideo: React.FC<{ participant: Participant }> = ({ participant 
       <div className="video-overlay">
         <span className="participant-name">{participant.name}</span>
         <div className="media-indicators">
-          {!participant.isVideoEnabled && <span className="video-off">📷❌</span>}
-          {!participant.isAudioEnabled && <span className="audio-off">🎤❌</span>}
+          {!participant.isVideoEnabled && (
+            <span className="media-icon video-off" title="Camera off">
+              <VideoOff size={16} />
+            </span>
+          )}
+          {!participant.isAudioEnabled && (
+            <span className="media-icon audio-off" title="Microphone off">
+              <MicOff size={16} />
+            </span>
+          )}
         </div>
       </div>
       {!participant.stream && (
         <div className="connection-status">
+          <div className="connection-avatar">
+            <UserIcon size={18} />
+          </div>
           <div className="loading-spinner small"></div>
           <p>Connecting...</p>
         </div>
