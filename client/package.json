@@ -11,6 +11,7 @@
     "preview": "vite preview"
   },
   "dependencies": {
+    "@mediapipe/tasks-vision": "^0.10.32",
     "@supabase/supabase-js": "^2.53.0",
     "dayjs": "^1.11.13",
     "lucide-react": "^0.575.0",

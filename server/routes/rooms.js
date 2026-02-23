@@ -347,25 +347,15 @@ router.post('/:name/exit', async (req, res) => {
     }
 
     const room = roomResult.rows[0];
-    const isCreator = typeof creator === 'string' && creator === room.creator;
-    const isLastParticipant = Number(room.attendance) <= 1;
 
-    if (isCreator && isLastParticipant) {
-      await query('DELETE FROM "rooms" WHERE name = $1', [name]);
-      emitRoomsChanged(req, 'deleted', name);
-      return res.json({
-        success: true,
-        message: 'Room deleted because creator exited as last participant',
-        deleted: true,
-        data: null
-      });
-    }
-
-    // Attendance is synchronized by socket disconnect logic in server.js.
-    // Avoid decrementing here to prevent double-decrement races.
+    // Attendance/deletion is synchronized by socket disconnect logic in server.js.
+    // Avoid decrementing/deleting here to prevent stale-attendance races.
+    // This ensures only the last participant closing the room removes it.
     return res.json({
       success: true,
-      message: 'Exit acknowledged',
+      message: typeof creator === 'string' && creator === room.creator
+        ? 'Creator exit acknowledged; room stays while participants remain'
+        : 'Exit acknowledged',
       deleted: false,
       data: room
     });

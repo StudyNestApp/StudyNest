@@ -274,6 +274,20 @@ io.on('connection', (socket) => {
     }
   });
 
+  // Gesture reaction
+  socket.on('gesture-reaction', (emoji) => {
+    const userInfo = socketToUser.get(socket.id);
+    if (userInfo && typeof emoji === 'string' && emoji.trim()) {
+      io.to(userInfo.roomName).emit('gesture-reaction', {
+        socketId: socket.id,
+        userId: userInfo.userId,
+        userName: userInfo.userName,
+        emoji: emoji.trim(),
+        timestamp: Date.now(),
+      });
+    }
+  });
+
   // Handle disconnection
   socket.on('disconnect', () => {
     debugLog('User disconnected:', socket.id);

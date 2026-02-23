@@ -4,6 +4,7 @@ import { supabase } from '../lib/supabaseClient';
 import { SERVER_URL } from '../lib/serverConfig';
 import type { User } from '@supabase/supabase-js';
 import CreateRoom from '../components/CreateRoom';
+import UserProfileModal from '../components/UserProfileModal';
 
 import VideoRoom from './VideoRoom';
 import './../styles/Welcome.css';
@@ -37,6 +38,8 @@ function Welcome() {
   const [error, setError] = useState('');
   const [currentTime, setCurrentTime] = useState(dayjs());
   const [showCreateRoom, setShowCreateRoom] = useState(false);
+  const [showProfileModal, setShowProfileModal] = useState(false);
+  const [selectedProfileName, setSelectedProfileName] = useState('');
   
   // Video room states
   const [currentVideoRoom, setCurrentVideoRoom] = useState<Room | null>(null);
@@ -120,6 +123,37 @@ function Welcome() {
     window.location.href = '/'; // Redirect to auth form
   };
 
+  const openProfile = (userName: string) => {
+    setSelectedProfileName(userName);
+    setShowProfileModal(true);
+  };
+
+  const closeProfile = () => {
+    setShowProfileModal(false);
+    setSelectedProfileName('');
+  };
+
+  const selectedProfile = (() => {
+    if (!selectedProfileName) {
+      return null;
+    }
+
+    const normalizedName = selectedProfileName.toLowerCase();
+    const createdByUser = rooms.filter(room => room.creator.toLowerCase() === normalizedName);
+    const totalMembersHosted = createdByUser.reduce((total, room) => total + room.attendance, 0);
+    const focusXP = createdByUser.length * 25 + totalMembersHosted * 5;
+
+    return {
+      userName: selectedProfileName,
+      email:
+        user?.email && user.email.split('@')[0].toLowerCase() === normalizedName
+          ? user.email
+          : undefined,
+      roomsCreated: createdByUser.length,
+      focusXP,
+    };
+  })();
+
   // Handle room creation
   const handleRoomCreated = (newRoom: Room) => {
     // Add the new room to the beginning of the list
@@ -193,7 +227,7 @@ function Welcome() {
         headers: {
           'Content-Type': 'application/json',
         },
-        body: JSON.stringify({ creator }),
+        body: JSON.stringify({ creator, videoRoomId: currentVideoRoom.video_url }),
       });
 
       const data: ApiResponse = await response.json();
@@ -281,7 +315,7 @@ function Welcome() {
           headers: {
             'Content-Type': 'application/json',
           },
-          body: JSON.stringify({ creator }),
+          body: JSON.stringify({ creator, videoRoomId: currentVideoRoom.video_url }),
         });
       } catch (err) {
         console.error('Error handling runtime failure room exit:', err);
@@ -367,14 +401,25 @@ function Welcome() {
         <div className="header-card">
           <div className="header-content">
             <h1 className="welcome-title">
-              Welcome, {user?.email?.split('@')[0] || 'User'}!
+              Welcome,{' '}
+              <span>{user?.email?.split('@')[0] || 'User'}</span>
+              !
               <span style={{ color: 'initial' }}>👋</span>
             </h1>
             <p className="welcome-subtitle">Discover amazing study rooms and connect with fellow learners</p>
           </div>
-          <button onClick={handleSignOut} className="sign-out-btn">
-            Sign Out
-          </button>
+          <div className="header-actions">
+            <button
+              type="button"
+              className="header-profile-btn"
+              onClick={() => openProfile(user?.email?.split('@')[0] || 'User')}
+            >
+              Profile
+            </button>
+            <button onClick={handleSignOut} className="sign-out-btn">
+              Sign Out
+            </button>
+          </div>
         </div>
 
         {/* Error Message */}
@@ -434,7 +479,13 @@ function Welcome() {
                             <div className="creator-avatar">
                               {room.creator.charAt(0).toUpperCase()}
                             </div>
-                            <span className="creator-name">{room.creator}</span>
+                            <button
+                              type="button"
+                              className="creator-name profile-link"
+                              onClick={() => openProfile(room.creator)}
+                            >
+                              {room.creator}
+                            </button>
                           </div>
                         </td>
                         <td className="table-cell">
@@ -480,6 +531,13 @@ function Welcome() {
         isOpen={showCreateRoom}
         onClose={handleCloseCreateRoom}
         onRoomCreated={handleRoomCreated}
+      />
+
+      <UserProfileModal
+        isOpen={showProfileModal}
+        profile={selectedProfile}
+        currentUser={user}
+        onClose={closeProfile}
       />
     </div>
   );
