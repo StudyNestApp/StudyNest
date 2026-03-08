@@ -95,6 +95,166 @@ app.get('/', (req, res) => {
 // Store active video rooms and participants
 const videoRooms = new Map();
 const socketToUser = new Map();
+const roomFocusStates = new Map();
+const roomGoals = new Map();
+const roomLeaderboard = new Map();
+const roomStopVoteStates = new Map();
+
+const getTodayKey = () => new Date().toISOString().slice(0, 10);
+
+const getLeaderboardForToday = (roomName) => {
+  const todayKey = getTodayKey();
+  const leaderboardMap = roomLeaderboard.get(roomName) || new Map();
+  const list = [];
+
+  leaderboardMap.forEach((entry, userId) => {
+    if (entry.dateKey !== todayKey) {
+      leaderboardMap.set(userId, { ...entry, dateKey: todayKey, minutes: 0 });
+      list.push({ ...entry, dateKey: todayKey, minutes: 0 });
+      return;
+    }
+    list.push(entry);
+  });
+
+  if (roomLeaderboard.has(roomName)) {
+    roomLeaderboard.set(roomName, leaderboardMap);
+  }
+
+  return list.sort((a, b) => b.minutes - a.minutes);
+};
+
+const getRoomGoalsList = (roomName) => {
+  const goalsMap = roomGoals.get(roomName) || new Map();
+  return Array.from(goalsMap.values());
+};
+
+const getActiveSocketIdsInRoom = (roomName) => {
+  const roomSockets = io.sockets.adapter.rooms.get(roomName);
+  if (!roomSockets || roomSockets.size === 0) {
+    return [];
+  }
+
+  return Array.from(roomSockets).filter((socketId) => io.sockets.sockets.has(socketId));
+};
+
+const getFocusStopVotePayload = (roomName) => {
+  const voteState = roomStopVoteStates.get(roomName);
+  if (!voteState) {
+    return {
+      isActive: false,
+      requestedBy: null,
+      requestedBySocketId: null,
+      yesCount: 0,
+      noCount: 0,
+      totalEligible: 0,
+      threshold: 0,
+      yesVoterSocketIds: [],
+      noVoterSocketIds: [],
+    };
+  }
+
+  const eligibleSocketIds = getActiveSocketIdsInRoom(roomName);
+  const eligibleSocketSet = new Set(eligibleSocketIds);
+  const yesVoterSocketIds = [];
+  const noVoterSocketIds = [];
+
+  voteState.votes.forEach((value, socketId) => {
+    if (!eligibleSocketSet.has(socketId)) {
+      return;
+    }
+
+    if (value === 'yes') {
+      yesVoterSocketIds.push(socketId);
+      return;
+    }
+
+    if (value === 'no') {
+      noVoterSocketIds.push(socketId);
+    }
+  });
+
+  const totalEligible = eligibleSocketIds.length;
+  const threshold = totalEligible > 0 ? Math.ceil((2 * totalEligible) / 3) : 0;
+
+  return {
+    isActive: true,
+    requestedBy: voteState.requestedBy,
+    requestedBySocketId: voteState.requestedBySocketId,
+    yesCount: yesVoterSocketIds.length,
+    noCount: noVoterSocketIds.length,
+    totalEligible,
+    threshold,
+    yesVoterSocketIds,
+    noVoterSocketIds,
+    startedAt: voteState.startedAt,
+  };
+};
+
+const broadcastFocusStopVoteState = (roomName) => {
+  io.to(roomName).emit('focus-stop-vote-sync', getFocusStopVotePayload(roomName));
+};
+
+const tryResolveFocusStopVote = (roomName) => {
+  const voteState = roomStopVoteStates.get(roomName);
+  if (!voteState) {
+    return;
+  }
+
+  const activeSocketIds = getActiveSocketIdsInRoom(roomName);
+  const activeSocketIdSet = new Set(activeSocketIds);
+
+  voteState.votes.forEach((_, socketId) => {
+    if (!activeSocketIdSet.has(socketId)) {
+      voteState.votes.delete(socketId);
+    }
+  });
+
+  const payload = getFocusStopVotePayload(roomName);
+  if (!payload.isActive) {
+    roomStopVoteStates.delete(roomName);
+    broadcastFocusStopVoteState(roomName);
+    return;
+  }
+
+  const yesCount = payload.yesCount;
+  const noCount = payload.noCount;
+  const totalEligible = payload.totalEligible;
+  const threshold = payload.threshold;
+  const remainingVotes = Math.max(0, totalEligible - (yesCount + noCount));
+
+  if (yesCount >= threshold && threshold > 0) {
+    const existingState = roomFocusStates.get(roomName);
+    if (existingState && existingState.isRunning) {
+      const remaining = existingState.endAt
+        ? Math.max(0, Math.ceil((existingState.endAt - Date.now()) / 1000))
+        : Math.max(0, Math.floor(existingState.durationSec || 0));
+
+      const stoppedState = {
+        ...existingState,
+        durationSec: remaining,
+        endAt: null,
+        isRunning: false,
+        updatedBy: 'Vote passed',
+        updatedAt: Date.now(),
+      };
+
+      roomFocusStates.set(roomName, stoppedState);
+      io.to(roomName).emit('focus-timer-update', stoppedState);
+    }
+
+    roomStopVoteStates.delete(roomName);
+    broadcastFocusStopVoteState(roomName);
+    return;
+  }
+
+  if (yesCount + remainingVotes < threshold || yesCount + noCount >= totalEligible) {
+    roomStopVoteStates.delete(roomName);
+    broadcastFocusStopVoteState(roomName);
+    return;
+  }
+
+  broadcastFocusStopVoteState(roomName);
+};
 
 // Socket.io connection handling
 io.on('connection', (socket) => {
@@ -178,6 +338,11 @@ io.on('connection', (socket) => {
       isVideoEnabled: true,
       isAudioEnabled: true
     });
+
+    socket.emit('focus-state-sync', roomFocusStates.get(roomName) || null);
+    socket.emit('focus-goals-sync', getRoomGoalsList(roomName));
+    socket.emit('focus-leaderboard-sync', getLeaderboardForToday(roomName));
+    socket.emit('focus-stop-vote-sync', getFocusStopVotePayload(roomName));
   });
 
   // WebRTC signaling events
@@ -288,6 +453,187 @@ io.on('connection', (socket) => {
     }
   });
 
+  socket.on('focus-timer-update', (focusState) => {
+    const userInfo = socketToUser.get(socket.id);
+    if (!userInfo || !focusState || typeof focusState !== 'object') {
+      return;
+    }
+
+    const roomName = userInfo.roomName;
+    const normalizedState = {
+      preset: focusState.preset === '50/10' ? '50/10' : '25/5',
+      phase: focusState.phase === 'break' ? 'break' : 'focus',
+      durationSec: Number.isFinite(focusState.durationSec) ? Math.max(0, Math.floor(focusState.durationSec)) : 0,
+      endAt: typeof focusState.endAt === 'number' ? focusState.endAt : null,
+      isRunning: !!focusState.isRunning,
+      updatedBy: userInfo.userName,
+      updatedAt: Date.now(),
+      ownerSocketId: null,
+    };
+
+    const existingState = roomFocusStates.get(roomName);
+    const isNaturalCompletion = !normalizedState.isRunning && normalizedState.durationSec <= 0;
+    const isOwnerStopping =
+      !!existingState?.isRunning &&
+      !normalizedState.isRunning &&
+      existingState.ownerSocketId === socket.id;
+
+    if (existingState?.isRunning && !normalizedState.isRunning && !isNaturalCompletion && !isOwnerStopping) {
+      return;
+    }
+
+    if (normalizedState.isRunning) {
+      const isStartingNow = !existingState?.isRunning;
+      normalizedState.ownerSocketId = isStartingNow
+        ? socket.id
+        : existingState?.ownerSocketId || socket.id;
+    }
+
+    if (normalizedState.isRunning) {
+      roomStopVoteStates.delete(roomName);
+      broadcastFocusStopVoteState(roomName);
+    } else if (isOwnerStopping || isNaturalCompletion) {
+      roomStopVoteStates.delete(roomName);
+      broadcastFocusStopVoteState(roomName);
+    }
+
+    roomFocusStates.set(roomName, normalizedState);
+    io.to(roomName).emit('focus-timer-update', normalizedState);
+  });
+
+  socket.on('focus-stop-vote-start', () => {
+    const userInfo = socketToUser.get(socket.id);
+    if (!userInfo) {
+      return;
+    }
+
+    const roomName = userInfo.roomName;
+    const currentState = roomFocusStates.get(roomName);
+    if (!currentState?.isRunning) {
+      return;
+    }
+
+    if (currentState.ownerSocketId === socket.id) {
+      return;
+    }
+
+    if (roomStopVoteStates.has(roomName)) {
+      broadcastFocusStopVoteState(roomName);
+      return;
+    }
+
+    roomStopVoteStates.set(roomName, {
+      requestedBy: userInfo.userName,
+      requestedBySocketId: socket.id,
+      startedAt: Date.now(),
+      votes: new Map([[socket.id, 'yes']]),
+    });
+
+    tryResolveFocusStopVote(roomName);
+  });
+
+  socket.on('focus-stop-vote-cast', (payload) => {
+    const userInfo = socketToUser.get(socket.id);
+    if (!userInfo || !payload || typeof payload !== 'object') {
+      return;
+    }
+
+    const roomName = userInfo.roomName;
+    const voteState = roomStopVoteStates.get(roomName);
+    const voteValue = payload.vote === 'yes' ? 'yes' : payload.vote === 'no' ? 'no' : null;
+    if (!voteState || !voteValue) {
+      return;
+    }
+
+    if (voteState.requestedBySocketId === socket.id) {
+      return;
+    }
+
+    voteState.votes.set(socket.id, voteValue);
+    tryResolveFocusStopVote(roomName);
+  });
+
+  socket.on('focus-stop-vote-request-sync', () => {
+    const userInfo = socketToUser.get(socket.id);
+    if (!userInfo) {
+      return;
+    }
+
+    socket.emit('focus-stop-vote-sync', getFocusStopVotePayload(userInfo.roomName));
+  });
+
+  socket.on('goal-checkin-update', (payload) => {
+    const userInfo = socketToUser.get(socket.id);
+    if (!userInfo || !payload || typeof payload !== 'object') {
+      return;
+    }
+
+    const roomName = userInfo.roomName;
+    const goalText = typeof payload.goal === 'string' ? payload.goal.trim().slice(0, 180) : '';
+    const done = !!payload.done;
+
+    if (!roomGoals.has(roomName)) {
+      roomGoals.set(roomName, new Map());
+    }
+
+    const roomGoalMap = roomGoals.get(roomName);
+    if (!goalText) {
+      roomGoalMap.delete(socket.id);
+    } else {
+      roomGoalMap.set(socket.id, {
+        socketId: socket.id,
+        userId: userInfo.userId,
+        userName: userInfo.userName,
+        goal: goalText,
+        done,
+      });
+    }
+
+    io.to(roomName).emit('focus-goals-sync', getRoomGoalsList(roomName));
+  });
+
+  socket.on('focus-minutes-add', (payload) => {
+    const userInfo = socketToUser.get(socket.id);
+    if (!userInfo || !payload || typeof payload !== 'object') {
+      return;
+    }
+
+    const minutesToAddRaw = Number(payload.minutes);
+    const minutesToAdd = Number.isFinite(minutesToAddRaw)
+      ? Math.max(0, Math.min(30, Math.floor(minutesToAddRaw)))
+      : 0;
+
+    if (minutesToAdd <= 0) {
+      return;
+    }
+
+    const roomName = userInfo.roomName;
+    const todayKey = getTodayKey();
+
+    if (!roomLeaderboard.has(roomName)) {
+      roomLeaderboard.set(roomName, new Map());
+    }
+
+    const leaderboardMap = roomLeaderboard.get(roomName);
+    const existing = leaderboardMap.get(userInfo.userId);
+    if (!existing || existing.dateKey !== todayKey) {
+      leaderboardMap.set(userInfo.userId, {
+        userId: userInfo.userId,
+        userName: userInfo.userName,
+        minutes: minutesToAdd,
+        dateKey: todayKey,
+      });
+    } else {
+      leaderboardMap.set(userInfo.userId, {
+        ...existing,
+        userName: userInfo.userName,
+        minutes: existing.minutes + minutesToAdd,
+      });
+    }
+
+    io.to(roomName).emit('focus-leaderboard-sync', getLeaderboardForToday(roomName));
+  });
+
   // Handle disconnection
   socket.on('disconnect', () => {
     debugLog('User disconnected:', socket.id);
@@ -300,6 +646,17 @@ io.on('connection', (socket) => {
       const room = videoRooms.get(roomName);
       if (room) {
         room.delete(socket.id);
+
+        if (roomGoals.has(roomName)) {
+          roomGoals.get(roomName).delete(socket.id);
+          io.to(roomName).emit('focus-goals-sync', getRoomGoalsList(roomName));
+        }
+
+        if (roomStopVoteStates.has(roomName)) {
+          const voteState = roomStopVoteStates.get(roomName);
+          voteState.votes.delete(socket.id);
+          tryResolveFocusStopVote(roomName);
+        }
         
         // Update database attendance
         updateRoomAttendance(userInfo.dbRoomName || roomName, room.size);
@@ -307,6 +664,10 @@ io.on('connection', (socket) => {
         // If room is empty, clean it up
         if (room.size === 0) {
           videoRooms.delete(roomName);
+          roomFocusStates.delete(roomName);
+          roomGoals.delete(roomName);
+          roomLeaderboard.delete(roomName);
+          roomStopVoteStates.delete(roomName);
         }
         
         // Notify others

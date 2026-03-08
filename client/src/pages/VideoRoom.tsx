@@ -256,6 +256,60 @@ interface GestureReactionPayload {
   timestamp: number;
 }
 
+interface FocusTimerStatePayload {
+  preset: '25/5' | '50/10';
+  phase: 'focus' | 'break';
+  durationSec: number;
+  endAt: number | null;
+  isRunning: boolean;
+  ownerSocketId?: string | null;
+  updatedBy?: string;
+  updatedAt?: number;
+}
+
+interface FocusStopVotePayload {
+  isActive: boolean;
+  requestedBy: string | null;
+  requestedBySocketId: string | null;
+  yesCount: number;
+  noCount: number;
+  totalEligible: number;
+  threshold: number;
+  yesVoterSocketIds: string[];
+  noVoterSocketIds: string[];
+  startedAt?: number;
+}
+
+interface FocusGoalEntry {
+  socketId: string;
+  userId: string;
+  userName: string;
+  goal: string;
+  done: boolean;
+}
+
+interface FocusLeaderboardEntry {
+  userId: string;
+  userName: string;
+  minutes: number;
+  dateKey: string;
+}
+
+const getPresetDurationSec = (preset: '25/5' | '50/10', phase: 'focus' | 'break') => {
+  if (preset === '50/10') {
+    return phase === 'focus' ? 50 * 60 : 10 * 60;
+  }
+
+  return phase === 'focus' ? 25 * 60 : 5 * 60;
+};
+
+const formatSeconds = (totalSeconds: number) => {
+  const safe = Math.max(0, Math.floor(totalSeconds));
+  const minutes = Math.floor(safe / 60);
+  const seconds = safe % 60;
+  return `${String(minutes).padStart(2, '0')}:${String(seconds).padStart(2, '0')}`;
+};
+
 // WebRTC configuration
 const rtcConfig = {
   iceServers: [
@@ -271,6 +325,18 @@ const VideoRoom: React.FC<VideoRoomProps> = ({ roomId, roomName: roomNameProp, u
   const [isScreenSharing, setIsScreenSharing] = useState(false);
   const [isGestureEnabled, setIsGestureEnabled] = useState(false);
   const [gestureStatus, setGestureStatus] = useState<'idle' | 'loading' | 'ready' | 'error'>('idle');
+  const [focusPreset, setFocusPreset] = useState<'25/5' | '50/10'>('25/5');
+  const [focusPhase, setFocusPhase] = useState<'focus' | 'break'>('focus');
+  const [focusDurationSec, setFocusDurationSec] = useState(getPresetDurationSec('25/5', 'focus'));
+  const [focusEndAt, setFocusEndAt] = useState<number | null>(null);
+  const [focusIsRunning, setFocusIsRunning] = useState(false);
+  const [focusOwnerSocketId, setFocusOwnerSocketId] = useState<string | null>(null);
+  const [focusGoals, setFocusGoals] = useState<FocusGoalEntry[]>([]);
+  const [goalInput, setGoalInput] = useState('');
+  const [focusLeaderboard, setFocusLeaderboard] = useState<FocusLeaderboardEntry[]>([]);
+  const [focusStopVote, setFocusStopVote] = useState<FocusStopVotePayload | null>(null);
+  const [isRequestingStopVote, setIsRequestingStopVote] = useState(false);
+  const [isFocusToolkitOpen, setIsFocusToolkitOpen] = useState(true);
   const [gestureReactions, setGestureReactions] = useState<Map<string, string>>(new Map());
   const [chatMessages, setChatMessages] = useState<ChatMessage[]>([]);
   const [newMessage, setNewMessage] = useState('');
@@ -291,6 +357,7 @@ const VideoRoom: React.FC<VideoRoomProps> = ({ roomId, roomName: roomNameProp, u
   const gestureFrameRef = useRef<number | null>(null);
   const lastGestureVideoTimeRef = useRef(-1);
   const lastGestureProcessedAtRef = useRef(0);
+  const focusMinuteTickerRef = useRef<number | null>(null);
   const lastGestureSentAtRef = useRef<Record<SupportedGesture, number>>({
     Closed_Fist: 0,
     Open_Palm: 0,
@@ -558,6 +625,28 @@ const VideoRoom: React.FC<VideoRoomProps> = ({ roomId, roomName: roomNameProp, u
     }
   }, []);
 
+  const applyFocusTimerState = useCallback((incomingState: FocusTimerStatePayload | null) => {
+    if (!incomingState) {
+      return;
+    }
+
+    setFocusPreset(incomingState.preset === '50/10' ? '50/10' : '25/5');
+    setFocusPhase(incomingState.phase === 'break' ? 'break' : 'focus');
+    setFocusDurationSec(Math.max(0, Math.floor(incomingState.durationSec || 0)));
+    setFocusEndAt(typeof incomingState.endAt === 'number' ? incomingState.endAt : null);
+    setFocusIsRunning(!!incomingState.isRunning);
+    setFocusOwnerSocketId(
+      typeof incomingState.ownerSocketId === 'string' && incomingState.ownerSocketId
+        ? incomingState.ownerSocketId
+        : null
+    );
+
+    if (!incomingState.isRunning) {
+      setFocusStopVote(null);
+      setIsRequestingStopVote(false);
+    }
+  }, []);
+
   const setupSocketListeners = useCallback((socketConnection: Socket, stream: MediaStream) => {
     // Handle existing participants
     socketConnection.on('existing-participants', (existingParticipants: Participant[]) => {
@@ -637,6 +726,43 @@ const VideoRoom: React.FC<VideoRoomProps> = ({ roomId, roomName: roomNameProp, u
       setChatMessages(prev => [...prev, message]);
     });
 
+    socketConnection.on('focus-state-sync', (state: FocusTimerStatePayload | null) => {
+      applyFocusTimerState(state);
+    });
+
+    socketConnection.on('focus-timer-update', (state: FocusTimerStatePayload) => {
+      applyFocusTimerState(state);
+    });
+
+    socketConnection.on('focus-goals-sync', (entries: FocusGoalEntry[]) => {
+      const nextEntries = Array.isArray(entries) ? entries : [];
+      setFocusGoals(nextEntries);
+
+      const ownSocketId = localSocketIdRef.current;
+      const ownGoal = ownSocketId
+        ? nextEntries.find(entry => entry.socketId === ownSocketId)
+        : undefined;
+      if (ownGoal) {
+        setGoalInput(ownGoal.goal);
+      }
+    });
+
+    socketConnection.on('focus-leaderboard-sync', (entries: FocusLeaderboardEntry[]) => {
+      const sorted = (Array.isArray(entries) ? entries : []).sort((a, b) => b.minutes - a.minutes);
+      setFocusLeaderboard(sorted);
+    });
+
+    socketConnection.on('focus-stop-vote-sync', (votePayload: FocusStopVotePayload) => {
+      if (!votePayload?.isActive) {
+        setFocusStopVote(null);
+        setIsRequestingStopVote(false);
+        return;
+      }
+
+      setFocusStopVote(votePayload);
+      setIsRequestingStopVote(false);
+    });
+
     socketConnection.on('gesture-reaction', (reaction: GestureReactionPayload) => {
       if (!reaction?.socketId || !reaction?.emoji) {
         return;
@@ -652,7 +778,7 @@ const VideoRoom: React.FC<VideoRoomProps> = ({ roomId, roomName: roomNameProp, u
     socketConnection.on('user-stopped-screen-share', (data) => {
       debugLog(`${data.userName} stopped screen sharing`);
     });
-  }, [createPeerConnection, handleAnswer, handleIceCandidate, handleOffer, showGestureReaction]);
+  }, [applyFocusTimerState, createPeerConnection, handleAnswer, handleIceCandidate, handleOffer, showGestureReaction]);
 
   const toggleVideo = () => {
     if (localStream) {
@@ -725,6 +851,239 @@ const VideoRoom: React.FC<VideoRoomProps> = ({ roomId, roomName: roomNameProp, u
     setIsScreenSharing(false);
     socketRef.current?.emit('stop-screen-share');
   };
+
+  const emitFocusTimerState = useCallback((state: FocusTimerStatePayload) => {
+    socketRef.current?.emit('focus-timer-update', state);
+  }, []);
+
+  const requestFocusStopVote = () => {
+    const isOwner = !!(
+      localSocketIdRef.current &&
+      focusOwnerSocketId &&
+      localSocketIdRef.current === focusOwnerSocketId
+    );
+
+    if (!focusIsRunning || !socketRef.current || isOwner) {
+      return;
+    }
+
+    setIsRequestingStopVote(true);
+    socketRef.current.emit('focus-stop-vote-start');
+
+    window.setTimeout(() => {
+      setIsRequestingStopVote(false);
+    }, 2500);
+  };
+
+  const castFocusStopVote = (vote: 'yes' | 'no') => {
+    const isOwner = !!(
+      localSocketIdRef.current &&
+      focusOwnerSocketId &&
+      localSocketIdRef.current === focusOwnerSocketId
+    );
+
+    if (!focusIsRunning || !focusStopVote || !socketRef.current || isOwner) {
+      return;
+    }
+
+    socketRef.current.emit('focus-stop-vote-cast', { vote });
+  };
+
+  const handleFocusPresetChange = (preset: '25/5' | '50/10') => {
+    if (focusIsRunning) {
+      return;
+    }
+
+    const duration = getPresetDurationSec(preset, focusPhase);
+    setFocusPreset(preset);
+    setFocusDurationSec(duration);
+
+    emitFocusTimerState({
+      preset,
+      phase: focusPhase,
+      durationSec: duration,
+      endAt: null,
+      isRunning: false,
+    });
+  };
+
+  const toggleFocusPhase = () => {
+    if (focusIsRunning) {
+      return;
+    }
+
+    const nextPhase: 'focus' | 'break' = focusPhase === 'focus' ? 'break' : 'focus';
+    const duration = getPresetDurationSec(focusPreset, nextPhase);
+    setFocusPhase(nextPhase);
+    setFocusDurationSec(duration);
+
+    emitFocusTimerState({
+      preset: focusPreset,
+      phase: nextPhase,
+      durationSec: duration,
+      endAt: null,
+      isRunning: false,
+    });
+  };
+
+  const startFocusTimer = () => {
+    if (focusIsRunning) {
+      return;
+    }
+
+    const remaining = Math.max(1, Math.floor(focusDurationSec));
+    const endAt = Date.now() + remaining * 1000;
+    setFocusIsRunning(true);
+    setFocusEndAt(endAt);
+    setFocusStopVote(null);
+    setIsRequestingStopVote(false);
+
+    emitFocusTimerState({
+      preset: focusPreset,
+      phase: focusPhase,
+      durationSec: remaining,
+      endAt,
+      isRunning: true,
+    });
+  };
+
+  const resetFocusTimer = () => {
+    if (focusIsRunning) {
+      return;
+    }
+
+    const duration = getPresetDurationSec(focusPreset, focusPhase);
+    setFocusIsRunning(false);
+    setFocusEndAt(null);
+    setFocusDurationSec(duration);
+
+    emitFocusTimerState({
+      preset: focusPreset,
+      phase: focusPhase,
+      durationSec: duration,
+      endAt: null,
+      isRunning: false,
+    });
+  };
+
+  const stopFocusTimerAsOwner = () => {
+    const isOwner = !!(
+      localSocketIdRef.current &&
+      focusOwnerSocketId &&
+      localSocketIdRef.current === focusOwnerSocketId
+    );
+
+    if (!focusIsRunning || !isOwner) {
+      return;
+    }
+
+    const remaining = focusEndAt ? Math.max(0, Math.ceil((focusEndAt - Date.now()) / 1000)) : focusDurationSec;
+    setFocusIsRunning(false);
+    setFocusEndAt(null);
+    setFocusDurationSec(remaining);
+    setFocusStopVote(null);
+
+    emitFocusTimerState({
+      preset: focusPreset,
+      phase: focusPhase,
+      durationSec: remaining,
+      endAt: null,
+      isRunning: false,
+      ownerSocketId: null,
+    });
+  };
+
+  const submitGoalCheckIn = () => {
+    if (!socketRef.current) {
+      return;
+    }
+
+    const goal = goalInput.trim();
+    socketRef.current.emit('goal-checkin-update', {
+      goal,
+      done: false,
+    });
+  };
+
+  const toggleOwnGoalDone = () => {
+    if (!socketRef.current || !localSocketIdRef.current) {
+      return;
+    }
+
+    const ownGoal = focusGoals.find(entry => entry.socketId === localSocketIdRef.current);
+    if (!ownGoal) {
+      return;
+    }
+
+    socketRef.current.emit('goal-checkin-update', {
+      goal: ownGoal.goal,
+      done: !ownGoal.done,
+    });
+  };
+
+  useEffect(() => {
+    if (!focusIsRunning || !focusEndAt) {
+      return;
+    }
+
+    const timerId = window.setInterval(() => {
+      const remaining = Math.max(0, Math.ceil((focusEndAt - Date.now()) / 1000));
+      setFocusDurationSec(remaining);
+
+      if (remaining <= 0) {
+        setFocusIsRunning(false);
+        setFocusEndAt(null);
+        emitFocusTimerState({
+          preset: focusPreset,
+          phase: focusPhase,
+          durationSec: 0,
+          endAt: null,
+          isRunning: false,
+        });
+      }
+    }, 1000);
+
+    return () => {
+      window.clearInterval(timerId);
+    };
+  }, [emitFocusTimerState, focusEndAt, focusIsRunning, focusPhase, focusPreset]);
+
+  useEffect(() => {
+    if (!focusIsRunning || !!focusStopVote?.isActive || !socketRef.current) {
+      return;
+    }
+
+    socketRef.current.emit('focus-stop-vote-request-sync');
+    const timeoutId = window.setTimeout(() => {
+      socketRef.current?.emit('focus-stop-vote-request-sync');
+    }, 1000);
+
+    return () => {
+      window.clearTimeout(timeoutId);
+    };
+  }, [focusIsRunning, focusStopVote]);
+
+  useEffect(() => {
+    if (focusMinuteTickerRef.current !== null) {
+      window.clearInterval(focusMinuteTickerRef.current);
+      focusMinuteTickerRef.current = null;
+    }
+
+    if (!focusIsRunning || focusPhase !== 'focus' || !socketRef.current) {
+      return;
+    }
+
+    focusMinuteTickerRef.current = window.setInterval(() => {
+      socketRef.current?.emit('focus-minutes-add', { minutes: 1 });
+    }, 60000);
+
+    return () => {
+      if (focusMinuteTickerRef.current !== null) {
+        window.clearInterval(focusMinuteTickerRef.current);
+        focusMinuteTickerRef.current = null;
+      }
+    };
+  }, [focusIsRunning, focusPhase]);
 
   const sendChatMessage = () => {
     if (newMessage.trim() && socketRef.current) {
@@ -941,6 +1300,11 @@ const VideoRoom: React.FC<VideoRoomProps> = ({ roomId, roomName: roomNameProp, u
       socketRef.current.disconnect();
     }
 
+    if (focusMinuteTickerRef.current !== null) {
+      window.clearInterval(focusMinuteTickerRef.current);
+      focusMinuteTickerRef.current = null;
+    }
+
     reactionTimeoutsRef.current.forEach((timeoutId) => {
       window.clearTimeout(timeoutId);
     });
@@ -1046,6 +1410,11 @@ const VideoRoom: React.FC<VideoRoomProps> = ({ roomId, roomName: roomNameProp, u
         socketRef.current.disconnect();
       }
 
+      if (focusMinuteTickerRef.current !== null) {
+        window.clearInterval(focusMinuteTickerRef.current);
+        focusMinuteTickerRef.current = null;
+      }
+
       reactionTimeoutsMap.forEach((timeoutId) => {
         window.clearTimeout(timeoutId);
       });
@@ -1070,6 +1439,27 @@ const VideoRoom: React.FC<VideoRoomProps> = ({ roomId, roomName: roomNameProp, u
     );
   }
 
+  const ownGoalEntry = localSocketId
+    ? focusGoals.find(entry => entry.socketId === localSocketId)
+    : undefined;
+  const hasActiveStopVote = !!focusStopVote?.isActive;
+  const isFocusTimerOwner = !!(
+    focusIsRunning &&
+    localSocketId &&
+    focusOwnerSocketId &&
+    localSocketId === focusOwnerSocketId
+  );
+  const isStopVoteRequester = !!(
+    localSocketId &&
+    focusStopVote?.requestedBySocketId &&
+    localSocketId === focusStopVote.requestedBySocketId
+  );
+  const didVoteYes = !!(localSocketId && focusStopVote?.yesVoterSocketIds?.includes(localSocketId));
+  const didVoteNo = !!(localSocketId && focusStopVote?.noVoterSocketIds?.includes(localSocketId));
+  const hasVotedInStopVote = didVoteYes || didVoteNo;
+  const timerLabel = `${focusPreset} • ${focusPhase === 'focus' ? 'Focus' : 'Break'}`;
+  const leaderboardTop = focusLeaderboard.slice(0, 5);
+
   return (
     <div className="video-room-container">
       <div className="video-room-header">
@@ -1083,6 +1473,182 @@ const VideoRoom: React.FC<VideoRoomProps> = ({ roomId, roomName: roomNameProp, u
       </div>
 
       <div className="video-room-content">
+        <div className={`focus-toolkit-wrapper ${isFocusToolkitOpen ? 'open' : 'closed'}`}>
+          <div className="focus-toolkit-toggle-row">
+            <button
+              type="button"
+              className="focus-toolkit-toggle-btn"
+              onClick={() => setIsFocusToolkitOpen(prev => !prev)}
+              title={isFocusToolkitOpen ? 'Close focus panel' : 'Open focus panel'}
+            >
+              {isFocusToolkitOpen ? 'Hide Focus Panel ▲' : 'Show Focus Panel ▼'}
+            </button>
+          </div>
+
+          <div className="focus-toolkit">
+          <div className="focus-card timer-card">
+            <div className="focus-card-title">Shared Focus Timer</div>
+            <div className="focus-timer-value">{formatSeconds(focusDurationSec)}</div>
+            <div className="focus-timer-meta">{timerLabel}</div>
+            <div className="focus-preset-buttons">
+              <button
+                className={`focus-btn ${focusPreset === '25/5' ? 'active' : ''}`}
+                onClick={() => handleFocusPresetChange('25/5')}
+                disabled={focusIsRunning}
+              >
+                25/5
+              </button>
+              <button
+                className={`focus-btn ${focusPreset === '50/10' ? 'active' : ''}`}
+                onClick={() => handleFocusPresetChange('50/10')}
+                disabled={focusIsRunning}
+              >
+                50/10
+              </button>
+              <button className="focus-btn" onClick={toggleFocusPhase} disabled={focusIsRunning}>
+                {focusPhase === 'focus' ? 'Switch to Break' : 'Switch to Focus'}
+              </button>
+            </div>
+            <div className="focus-action-buttons">
+              {focusIsRunning ? (
+                isFocusTimerOwner ? (
+                  <button className="focus-btn primary" onClick={stopFocusTimerAsOwner}>
+                    Stop
+                  </button>
+                ) : (
+                  <button className="focus-btn locked" disabled>
+                    Running (vote needed to stop)
+                  </button>
+                )
+              ) : (
+                <button className="focus-btn primary" onClick={startFocusTimer}>Start</button>
+              )}
+              <button className="focus-btn" onClick={resetFocusTimer} disabled={focusIsRunning}>Reset</button>
+            </div>
+
+            {focusIsRunning && (
+              <div className="focus-stop-vote-panel">
+                {isFocusTimerOwner ? (
+                  <div className="focus-stop-vote-meta">You started this timer. You can stop it directly.</div>
+                ) : hasActiveStopVote ? (
+                  <>
+                    <div className="focus-stop-vote-meta">
+                      {isStopVoteRequester
+                        ? 'You requested to stop. Waiting for others to vote.'
+                        : 'Stop vote is active on the side panel.'}
+                    </div>
+                  </>
+                ) : (
+                  <>
+                    <button className="focus-btn subtle" onClick={requestFocusStopVote} disabled={isRequestingStopVote}>
+                      {isRequestingStopVote ? 'Requesting vote...' : 'Request vote to stop timer'}
+                    </button>
+                    {isRequestingStopVote && (
+                      <div className="focus-stop-vote-meta">Sending request to room...</div>
+                    )}
+                  </>
+                )}
+                {hasVotedInStopVote && (
+                  <div className="focus-stop-vote-meta">Your vote is recorded.</div>
+                )}
+              </div>
+            )}
+            </div>
+
+          <div className="focus-card goal-card">
+            <div className="focus-card-title">Session Goal Check-in</div>
+            <div className="goal-input-row">
+              <input
+                type="text"
+                value={goalInput}
+                onChange={(e) => setGoalInput(e.target.value)}
+                placeholder="Write your single goal..."
+                maxLength={180}
+              />
+              <button className="focus-btn primary" onClick={submitGoalCheckIn}>Save</button>
+            </div>
+            {ownGoalEntry && (
+              <button className="goal-done-toggle" onClick={toggleOwnGoalDone}>
+                {ownGoalEntry.done ? '✅ Marked done' : '☐ Mark as done'}
+              </button>
+            )}
+            <div className="goal-list">
+              {focusGoals.length === 0 ? (
+                <div className="focus-empty">No goals yet.</div>
+              ) : (
+                focusGoals.map(entry => (
+                  <div key={entry.socketId} className={`goal-item ${entry.done ? 'done' : ''}`}>
+                    <span className="goal-owner">{entry.userName}:</span>
+                    <span className="goal-text">{entry.goal}</span>
+                  </div>
+                ))
+              )}
+            </div>
+          </div>
+
+          <div className="focus-card leaderboard-card">
+            <div className="focus-card-title">Today Leaderboard (Focused Minutes)</div>
+            <div className="leaderboard-list">
+              {leaderboardTop.length === 0 ? (
+                <div className="focus-empty">No focused minutes yet.</div>
+              ) : (
+                leaderboardTop.map((entry, index) => (
+                  <div key={entry.userId} className="leaderboard-item">
+                    <span className="leaderboard-rank">#{index + 1}</span>
+                    <span className="leaderboard-user">{entry.userName}</span>
+                    <span className="leaderboard-minutes">{entry.minutes} min</span>
+                  </div>
+                ))
+              )}
+            </div>
+
+            {(hasActiveStopVote || isRequestingStopVote) && (
+              <div className="focus-stop-vote-indicator" role="status" aria-live="polite">
+                {hasActiveStopVote ? (
+                  <>
+                    <div className="focus-stop-vote-meta">
+                      Stop vote by {focusStopVote?.requestedBy || 'participant'}
+                    </div>
+                    <div className="focus-stop-vote-counts">
+                      {focusStopVote?.yesCount || 0}/{focusStopVote?.threshold || 0} yes • {focusStopVote?.noCount || 0} no
+                    </div>
+                    {!isStopVoteRequester && !isFocusTimerOwner && (
+                      <div className="focus-stop-vote-actions">
+                        <button
+                          className={`focus-btn ${didVoteYes ? 'active' : ''}`}
+                          onClick={() => castFocusStopVote('yes')}
+                          disabled={didVoteYes}
+                        >
+                          Yes
+                        </button>
+                        <button
+                          className={`focus-btn ${didVoteNo ? 'active' : ''}`}
+                          onClick={() => castFocusStopVote('no')}
+                          disabled={didVoteNo}
+                        >
+                          No
+                        </button>
+                      </div>
+                    )}
+                    {isStopVoteRequester ? (
+                      <div className="focus-stop-vote-meta">You can only view results for this vote.</div>
+                    ) : isFocusTimerOwner ? (
+                      <div className="focus-stop-vote-meta">As timer owner, you can only view vote results.</div>
+                    ) : (
+                      hasVotedInStopVote && (
+                        <div className="focus-stop-vote-meta">Your vote is recorded.</div>
+                      )
+                    )}
+                  </>
+                ) : (
+                  <div className="focus-stop-vote-meta">Sending vote request to room...</div>
+                )}
+              </div>
+            )}
+          </div>
+        </div>
+        </div>
+
         <div className="video-grid">
           {/* Local video */}
           <div className="video-container local-video">
