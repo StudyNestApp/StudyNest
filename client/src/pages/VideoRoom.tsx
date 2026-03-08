@@ -1346,7 +1346,7 @@ const VideoRoom: React.FC<VideoRoomProps> = ({ roomId, roomName: roomNameProp, u
         socketRef.current = socketConnection;
 
         const userName = user.email?.split('@')[0] || 'Anonymous';
-        setRoomName(roomId.substring(0, 8));
+        setRoomName(roomNameProp?.trim() || roomId.substring(0, 8));
         setupSocketListeners(socketConnection, stream);
 
         const joinRoom = () => {

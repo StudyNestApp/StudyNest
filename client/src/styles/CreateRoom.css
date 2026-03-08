@@ -9,8 +9,11 @@
   display: flex;
   align-items: center;
   justify-content: center;
+  padding: max(12px, env(safe-area-inset-top)) max(12px, env(safe-area-inset-right)) max(12px, env(safe-area-inset-bottom)) max(12px, env(safe-area-inset-left));
   z-index: 1000;
   backdrop-filter: blur(4px);
+  overflow: auto;
+  -webkit-overflow-scrolling: touch;
 }
 
 /* Modal Content */
@@ -20,9 +23,13 @@
   padding: 0;
   width: 90%;
   max-width: 480px;
+  max-height: min(92vh, 760px);
+  max-height: min(92dvh, 760px);
   box-shadow: 0 25px 50px rgba(0, 0, 0, 0.25);
   animation: modalSlideIn 0.3s ease-out;
   overflow: hidden;
+  display: flex;
+  flex-direction: column;
 }
 
 @keyframes modalSlideIn {
@@ -78,6 +85,8 @@
 /* Form Styles */
 .create-room-form {
   padding: 24px;
+  overflow-y: auto;
+  -webkit-overflow-scrolling: touch;
 }
 
 .form-group {
@@ -269,9 +278,15 @@
 
 /* Mobile Responsiveness */
 @media (max-width: 480px) {
+  .modal-overlay {
+    align-items: flex-start;
+  }
+
   .modal-content {
     width: 95%;
-    margin: 20px;
+    margin: 8px auto;
+    max-height: 96dvh;
+    border-radius: 14px;
   }
   
   .modal-header {
@@ -294,5 +309,12 @@
   .create-btn {
     width: 100%;
     justify-content: center;
+  }
+}
+
+@media (max-width: 900px) {
+  .modal-content {
+    width: min(96vw, 560px);
+    max-height: 94dvh;
   }
 }
