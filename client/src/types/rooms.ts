@@ -4,6 +4,7 @@ export interface Room {
   created_at: string;
   attendance: number;
   video_url?: string;
+  hasPassword?: boolean;
 }
 
 export interface ApiResponse<T> {

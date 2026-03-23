@@ -179,9 +179,34 @@ function Welcome() {
 
   // Handle joining a room
   const handleJoinRoom = async (room: Room) => {
-    if (!room.video_url) {
+    // Always fetch latest room data from backend
+    let latestRoom: Room | null = null;
+    try {
+      const res = await fetch(`${SERVER_URL}/rooms/${room.name}`);
+      const data: ApiResponse = await res.json();
+      if (data.success && data.data && !Array.isArray(data.data)) {
+        latestRoom = data.data as Room;
+      } else {
+        setError('Failed to fetch room details.');
+        return;
+      }
+    } catch (err) {
+      setError('Failed to fetch room details.');
+      return;
+    }
+
+    if (!latestRoom.video_url) {
       setError('Room video URL not available');
       return;
+    }
+
+    let password = '';
+    if (latestRoom.hasPassword) {
+      password = window.prompt('This room is password protected. Please enter the password:') || '';
+      if (!password) {
+        setError('Password is required to join this room.');
+        return;
+      }
     }
 
     try {
@@ -191,6 +216,7 @@ function Welcome() {
         headers: {
           'Content-Type': 'application/json',
         },
+        body: JSON.stringify({ password }),
       });
 
       const data: ApiResponse = await response.json();

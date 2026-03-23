@@ -9,6 +9,7 @@ interface Room {
   created_at: string;
   attendance: number;
   video_url?: string;
+  password?: string | null;
 }
 
 interface CreateRoomProps {
@@ -27,6 +28,7 @@ interface ApiResponse {
 
 function CreateRoom({ user, onRoomCreated, onClose, isOpen }: CreateRoomProps) {
   const [roomName, setRoomName] = useState('');
+  const [password, setPassword] = useState('');
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
 
@@ -50,6 +52,7 @@ function CreateRoom({ user, onRoomCreated, onClose, isOpen }: CreateRoomProps) {
       creator: user.email.split('@')[0],
       name: roomName.trim(),
       attendance: 1, // Creator starts as first member
+      password: password || undefined,
     };
 
     // Debug logging
@@ -87,6 +90,7 @@ function CreateRoom({ user, onRoomCreated, onClose, isOpen }: CreateRoomProps) {
 
   const handleClose = () => {
     setRoomName('');
+    setPassword('');
     setError('');
     onClose();
   };
@@ -124,6 +128,25 @@ function CreateRoom({ user, onRoomCreated, onClose, isOpen }: CreateRoomProps) {
             />
             <div className="form-help">
               Choose a descriptive name that others can easily find
+            </div>
+          </div>
+          <div className="form-group">
+            <label htmlFor="roomPassword" className="form-label">
+              Room Password <span style={{ color: '#aaa', fontWeight: 'normal' }}>(optional)</span>
+            </label>
+            <input
+              type="password"
+              id="roomPassword"
+              value={password}
+              onChange={(e) => setPassword(e.target.value)}
+              placeholder="Set a password to restrict access"
+              className="form-input"
+              maxLength={64}
+              disabled={loading}
+              autoComplete="new-password"
+            />
+            <div className="form-help">
+              Leave blank for open room. Password is required to join if set.
             </div>
           </div>
 

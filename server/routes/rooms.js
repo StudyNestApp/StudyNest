@@ -35,10 +35,15 @@ router.get('/', async (req, res) => {
   try {
     const result = await query('SELECT * FROM "rooms" ORDER BY created_at DESC');
     debugLog('📋 Fetched rooms:', result.rows);
+    // Remove password, add hasPassword
+    const rooms = result.rows.map(room => {
+      const { password, ...rest } = room;
+      return { ...rest, hasPassword: !!password };
+    });
     res.json({
       success: true,
-      data: result.rows,
-      count: result.rows.length
+      data: rooms,
+      count: rooms.length
     });
   } catch (error) {
     console.error('Error fetching rooms:', error);
@@ -63,9 +68,11 @@ router.get('/:name', async (req, res) => {
       });
     }
     
+    // Remove password, add hasPassword
+    const { password, ...rest } = result.rows[0];
     res.json({
       success: true,
-      data: result.rows[0]
+      data: { ...rest, hasPassword: !!password }
     });
   } catch (error) {
     console.error('Error fetching room:', error);
@@ -80,10 +87,10 @@ router.get('/:name', async (req, res) => {
 // POST /rooms - Create a new room
 router.post('/', async (req, res) => {
   try {
-    const { creator, name, attendance = 1 } = req.body;
-    
-    debugLog('📝 Creating room with data:', { creator, name, attendance });
-    
+    const { creator, name, attendance = 1, password } = req.body;
+
+    debugLog('📝 Creating room with data:', { creator, name, attendance, password: password ? '[PROVIDED]' : '[NONE]' });
+
     // Validation
     if (!creator || !name) {
       return res.status(400).json({
@@ -91,7 +98,7 @@ router.post('/', async (req, res) => {
         error: 'Creator and name are required'
       });
     }
-    
+
     // Check if room already exists
     const existingRoom = await query('SELECT * FROM "rooms" WHERE name = $1', [name]);
     if (existingRoom.rows.length > 0) {
@@ -100,23 +107,23 @@ router.post('/', async (req, res) => {
         error: 'Room with this name already exists'
       });
     }
-    
+
     // Generate unique video room ID
     const videoRoomId = generateVideoRoomId();
     debugLog('🎬 Generated video room ID:', videoRoomId);
-    
-    const insertValues = [creator, name, attendance, videoRoomId];
+
+    const insertValues = [creator, name, attendance, videoRoomId, password || null];
     debugLog('💾 About to insert with values:', insertValues);
-    
-    // Create room with video_url
-    const insertQuery = 'INSERT INTO "rooms" (creator, name, created_at, attendance, video_url) VALUES ($1, $2, CURRENT_TIMESTAMP, $3, $4) RETURNING *';
+
+    // Create room with video_url and password
+    const insertQuery = 'INSERT INTO "rooms" (creator, name, created_at, attendance, video_url, password) VALUES ($1, $2, CURRENT_TIMESTAMP, $3, $4, $5) RETURNING *';
     debugLog('📝 Insert query:', insertQuery);
-    
+
     const result = await query(insertQuery, insertValues);
-    
+
     debugLog('✅ Room created successfully:', result.rows[0]);
     debugLog('🔗 Video URL in result:', result.rows[0].video_url);
-    
+
     emitRoomsChanged(req, 'created', name);
     res.status(201).json({
       success: true,
@@ -125,7 +132,7 @@ router.post('/', async (req, res) => {
     });
   } catch (error) {
     console.error('Error creating room:', error);
-    
+
     res.status(500).json({
       success: false,
       error: 'Failed to create room',
@@ -270,19 +277,36 @@ router.patch('/:name/attendance', async (req, res) => {
 router.post('/:name/join', async (req, res) => {
   try {
     const { name } = req.params;
-    
+    const { password } = req.body;
+
+    // Fetch room to check password
+    const roomResult = await query('SELECT * FROM "rooms" WHERE name = $1', [name]);
+    if (roomResult.rows.length === 0) {
+      return res.status(404).json({
+        success: false,
+        error: 'Room not found'
+      });
+    }
+    const room = roomResult.rows[0];
+    if (room.password && room.password !== password) {
+      return res.status(401).json({
+        success: false,
+        error: 'Incorrect password'
+      });
+    }
+
     const result = await query(
       'UPDATE "rooms" SET attendance = attendance + 1 WHERE name = $1 RETURNING *',
       [name]
     );
-    
+
     if (result.rows.length === 0) {
       return res.status(404).json({
         success: false,
         error: 'Room not found'
       });
     }
-    
+
     res.json({
       success: true,
       message: 'Joined room successfully',
